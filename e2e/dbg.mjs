@@ -1,0 +1,14 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch();
+const pg = await (await b.newContext({ignoreHTTPSErrors:true})).newPage();
+pg.on('console', m => { if (m.type()==='error') console.log('ERR:', m.text()); });
+await pg.goto('https://trenes.h1756.es/', {waitUntil:'domcontentloaded'});
+await pg.waitForSelector('input[type=text]', {timeout:8000});
+const n = await pg.locator('input[type=text]').count();
+console.log('inputs:', n);
+await pg.locator('input[type=text]').first().fill('atocha');
+await pg.waitForTimeout(1500);
+console.log('options:', await pg.locator('li[role=option]').count());
+console.log('lists:', await pg.locator('ul').count());
+await pg.screenshot({path:'dbg.png'});
+await b.close();

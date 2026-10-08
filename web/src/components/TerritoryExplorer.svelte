@@ -76,7 +76,7 @@
     <ul class="stlist" aria-label="Estaciones">
       {#each stations.items as st}
         <li>
-          <a href="/estacion/{st.feeds.map(f => f + ':' + st.stop_id).join(',')}">
+          <a href="/estacion/{st.key_parts.map(p => p.join(':')).join(',')}">
             <span class="n">{st.name}</span>
             <span class="loc">
               {#if st.poblacion && st.poblacion !== st.name}{st.poblacion} · {/if}

@@ -27,7 +27,7 @@ const pages = Math.ceil(data.total / 80);
     <ul class="st">
       {data.items.map((s: any) => (
         <li>
-          <a href={`/estacion/${s.feeds.map((f: string) => f + ':' + s.stop_id).join(',')}`}>
+          <a href={`/estacion/${s.key_parts.map((p: string[]) => p.join(':')).join(',')}`}>
             {s.name}
           </a>
           <span class="muted">

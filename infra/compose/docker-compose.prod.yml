@@ -1,6 +1,13 @@
 # Despliegue en VPS con Coolify/Traefik existente.
 # Traefik ya publica :80/:443; nosotros solo etiquetamos el servicio web.
-# Uso: docker compose -f docker-compose.yml -f infra/compose/docker-compose.prod.yml up -d --build
+#
+# USAR SIEMPRE el script de despliegue (fija el proyecto "trenes" y hace
+# backup + checks):    sudo bash scripts/deploy.sh
+#
+# Si se lanza a mano, ES OBLIGATORIO -p trenes (sin él crea un segundo
+# stack y una segunda base de datos vacía — incidente v0.3.1):
+#   docker compose -p trenes -f docker-compose.yml \
+#     -f infra/compose/docker-compose.prod.yml up -d --build
 services:
   db:
     restart: unless-stopped

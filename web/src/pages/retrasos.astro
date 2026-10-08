@@ -9,7 +9,9 @@ try { items = await api.ranking(100); } catch {}
 <Base title="Retrasos en tiempo real — Puntualidad Renfe">
   <p><a href="/">← Buscador</a></p>
   <h1>Retrasos en tiempo real</h1>
-  <p class="muted">Trenes en circulación o próximos con retraso notificado por Renfe.</p>
+  <p class="muted">Trenes en circulación o próximos con retraso notificado por Renfe.
+    La «próxima parada» es la que informa el feed RT, no necesariamente la
+    posición física actual del tren.</p>
 
   <div class="card">
     {items.length === 0

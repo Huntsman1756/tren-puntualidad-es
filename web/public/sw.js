@@ -8,14 +8,19 @@ self.addEventListener('fetch', () => {});
 self.addEventListener('push', (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (err) { d = {}; }
-  e.waitUntil(self.registration.showNotification(d.title || 'Trenes a tiempo', {
-    body: d.body || '',
-    data: { url: d.url || '/' },
-    tag: d.tag || 'trenes',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    renotify: true,
-  }));
+  e.waitUntil(Promise.all([
+    self.registration.showNotification(d.title || 'Trenes a tiempo', {
+      body: d.body || '',
+      data: { url: d.url || '/' },
+      tag: d.tag || 'trenes',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      renotify: true,
+    }),
+    // repostear a las páginas abiertas (observable; también sirve para QA e2e)
+    clients.matchAll({ type: 'window' }).then((cs) =>
+      cs.forEach((c) => c.postMessage({ type: 'push', payload: d }))),
+  ]));
 });
 
 self.addEventListener('notificationclick', (e) => {
