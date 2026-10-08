@@ -444,7 +444,7 @@ def ranking(limit: int = Query(50, ge=1, le=200), min_delay: int = 60,
         LEFT JOIN rt_fleet fl ON fl.feed=rt.feed AND fl.trip_id=rt.trip_id
         WHERE GREATEST(rt.delay, COALESCE(fl.delay_min,0)*60) >= :mind
           AND rt.next_stop_time > :now
-          AND (:feed IS NULL OR rt.feed = :feed)
+          AND (CAST(:feed AS text) IS NULL OR rt.feed = :feed)
         ORDER BY delay DESC LIMIT :lim
     """)
     with engine.connect() as c:
