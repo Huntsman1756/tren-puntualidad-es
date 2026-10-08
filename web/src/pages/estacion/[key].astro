@@ -52,6 +52,13 @@ const maxDate = coverage
     <FavStar client:load k={key} name={name} />
   </div>
   <p class="muted">{networks.join(' + ')}</p>
+  {infos[0].geo && (
+    <p class="muted geo-line">
+      {infos[0].geo.poblacion && <>{infos[0].geo.poblacion} · </>}
+      <a href={`/provincias/${infos[0].geo.provincia_slug}`}>{infos[0].geo.provincia}</a> ·{' '}
+      <a href={`/comunidades/${infos[0].geo.ccaa_slug}`}>{infos[0].geo.ccaa}</a>
+    </p>
+  )}
   <AlertButton client:load cfg={{ type: 'station', station_key: key }} label={name} />
 
   {alerts.map((a) => (

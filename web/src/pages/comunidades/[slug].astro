@@ -1,0 +1,37 @@
+---
+import Base from '../../layouts/Base.astro';
+import { api } from '../../lib/api';
+
+const slug = Astro.params.slug || '';
+let data: any = null;
+try {
+  const r = await fetch(`${process.env.API_INTERNAL_URL || 'http://localhost:8000'}/api/v1/geo/ccaa/${slug}`);
+  if (r.ok) data = await r.json();
+} catch {}
+if (!data) return Astro.redirect('/estaciones');
+---
+<Base title={`${data.name} — estaciones Renfe por provincia`}
+    description={`${data.stations} estaciones Renfe en ${data.name}, agrupadas por provincia.`}
+    canonical={`/comunidades/${slug}`}>
+  <nav class="breadcrumb"><a href="/estaciones">← Territorios</a></nav>
+  <h1>{data.name}</h1>
+  <p class="muted">{data.stations} estaciones</p>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Provincias</h2>
+    <ul class="plist">
+      {data.provinces.map((p: any) => (
+        <li>
+          <a href={`/provincias/${p.slug}`}>{p.name}</a>
+          <span class="muted">{p.stations} estaciones</span>
+        </li>
+      ))}
+    </ul>
+  </div>
+</Base>
+<style>
+  .plist { list-style: none; padding: 0; margin: 0; }
+  .plist li { display: flex; justify-content: space-between; padding: .5rem 0;
+              border-top: 1px solid var(--border); }
+  .plist li:first-child { border-top: 0; }
+</style>

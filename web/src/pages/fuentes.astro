@@ -55,6 +55,26 @@ import Base from '../layouts/Base.astro';
   </div>
 
   <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Territorio (provincia y comunidad)</h2>
+    <ul>
+      <li>La adscripción territorial procede, por este orden, de: el
+          <strong>catálogo oficial de estaciones Renfe</strong> (data.renfe.com,
+          join exacto por código de estación) y el <strong>geocodificador
+          oficial Cartociudad/IGN</strong> sobre las coordenadas cuando la
+          parada no aparece en el catálogo.</li>
+      <li>La correspondencia provincia → comunidad usa la codificación
+          oficial del <strong>INE</strong>. Nunca se deduce la provincia
+          del prefijo del código de estación.</li>
+      <li>Cuando ambos mecanismos fallan se deja la estación
+          <em>sin clasificar</em> antes que adscribirla a un territorio
+          incierto; el informe de cobertura está en
+          <code>/api/v1/geo/coverage</code>.</li>
+      <li>Las clasificaciones son persistentes: una recarga del GTFS no
+          borra la adscripción de una estación.</li>
+    </ul>
+  </div>
+
+  <div class="card">
     <h2 style="margin-top:0;font-size:1rem">Frecuencias</h2>
     <ul>
       <li>Cercanías tiempo real: cada ~25 s (fuentes RT) + ~45 s (flota observada).</li>

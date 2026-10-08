@@ -166,6 +166,28 @@ class TripFlag(Base):
 Index("ix_trip_flags_semidirect", TripFlag.feed, TripFlag.semidirect)
 
 
+class GeoStation(Base):
+    """Adscripción territorial persistente de cada parada.
+
+    No se borra en la recarga diaria del GTFS: si una parada desaparece se
+    marca active=0 y se conserva su clasificación. `source` documenta la
+    procedencia: 'catalogo' (join exacto CODIGO oficial) o 'geo_inferida'
+    (vecino catalogado cercano, auditable por dist_m/matched_code).
+    """
+    __tablename__ = "geo_station"
+    feed = Column(String(8), primary_key=True)
+    stop_id = Column(String(32), primary_key=True)
+    cpro = Column(String(2))           # CPRO INE o None
+    provincia = Column(String(40))     # nombre oficial INE
+    ccaa_code = Column(String(2))      # CAUTO INE
+    ccaa = Column(String(40))
+    poblacion = Column(String(80))     # POBLACION del catálogo (núcleo)
+    source = Column(String(20), nullable=False)  # catalogo | geo_inferida
+    matched_code = Column(String(12))  # CÓDIGO del catálogo usado
+    dist_m = Column(Float)             # distancia de la inferencia
+    active = Column(Integer, default=1)
+
+
 class PushSub(Base):
     """Suscripción Web Push anónima. Sin cuentas: la clave es el endpoint
     (opaco, controlado por el navegador). Borrado inmediato al darse de baja

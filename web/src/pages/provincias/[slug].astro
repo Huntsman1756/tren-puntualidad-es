@@ -1,0 +1,56 @@
+---
+import Base from '../../layouts/Base.astro';
+import { api } from '../../lib/api';
+import { FEED_NAME } from '../../lib/format';
+
+const slug = Astro.params.slug || '';
+const page = Math.max(1, parseInt(Astro.url.searchParams.get('page') || '1', 10));
+let data: any = null;
+try {
+  const r = await fetch(`${process.env.API_INTERNAL_URL || 'http://localhost:8000'}/api/v1/geo/provincia/${slug}?page=${page}&size=80`);
+  if (r.ok) data = await r.json();
+} catch {}
+if (!data) return Astro.redirect('/estaciones');
+const pages = Math.ceil(data.total / 80);
+---
+<Base title={`${data.provincia} — estaciones Renfe`}
+    description={`${data.total} estaciones Renfe en ${data.provincia} (${data.ccaa}): salidas, llegadas y retrasos.`}
+    canonical={`/provincias/${slug}`}>
+  <nav class="breadcrumb">
+    <a href="/estaciones">Territorios</a> ·
+    <a href={`/comunidades/${data.ccaa ? (data.ccaa_slug || '') : ''}`}>{data.ccaa}</a>
+  </nav>
+  <h1>{data.provincia}</h1>
+  <p class="muted">{data.ccaa} · {data.total} estaciones</p>
+
+  <div class="card">
+    <ul class="st">
+      {data.items.map((s: any) => (
+        <li>
+          <a href={`/estacion/${s.feeds.map((f: string) => f + ':' + s.stop_id).join(',')}`}>
+            {s.name}
+          </a>
+          <span class="muted">
+            {s.poblacion && s.poblacion !== s.name ? `${s.poblacion} · ` : ''}
+            {s.feeds.join(' + ')}
+          </span>
+        </li>
+      ))}
+    </ul>
+    {pages > 1 && (
+      <div class="pager">
+        {page > 1 && <a href={`/provincias/${slug}?page=${page - 1}`}>← Anterior</a>}
+        <span>{page} / {pages}</span>
+        {page < pages && <a href={`/provincias/${slug}?page=${page + 1}`}>Siguiente →</a>}
+      </div>
+    )}
+  </div>
+</Base>
+<style>
+  .st { list-style: none; padding: 0; margin: 0; columns: 2; column-gap: 2rem; }
+  .st li { padding: .35rem 0; display: flex; justify-content: space-between;
+           gap: .6rem; break-inside: avoid; }
+  .st .muted { font-size: .78rem; }
+  .pager { display: flex; gap: 1.2rem; justify-content: center; margin-top: 1rem; }
+  @media (max-width: 560px) { .st { columns: 1; } }
+</style>

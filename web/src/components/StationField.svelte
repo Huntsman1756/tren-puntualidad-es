@@ -90,7 +90,8 @@
         <li role="option" aria-selected={i === active}
             class:active={i === active}
             on:mousedown|preventDefault={() => pickItem(it)}>
-          <span class="st-name">{it.name}</span>
+          <span class="st-name">{it.name}
+            {#if it.provincia}<span class="st-prov">{it.provincia}</span>{/if}</span>
           {#if it.networks}<span class="st-net">{it.networks.join(' + ')}</span>{/if}
         </li>
       {/each}
@@ -111,6 +112,7 @@
              justify-content: space-between; gap: .6rem; align-items: baseline; }
   .list li.active, .list li:hover { background: var(--accent-dim); }
   .st-net { font-size: .72rem; color: var(--muted); text-align: right; flex-shrink: 0; }
+  .st-prov { font-size: .72rem; color: var(--muted); margin-left: .4rem; }
   .fav-hint { font-size: .72rem; color: var(--muted); cursor: default;
               text-transform: uppercase; letter-spacing: .05em; padding-bottom: .3rem !important; }
 </style>

@@ -14,6 +14,7 @@ from collector.config import (
     POLL_VEHICLE_POSITIONS,
 )
 from collector.db import engine, get_meta, set_meta, wait_and_create
+from collector.geo import run_geo
 from collector.gtfsutil import TZINFO
 from collector.push import run_push_cycle
 from collector.realtime import (
@@ -116,6 +117,7 @@ async def maintenance_loop():
             await asyncio.to_thread(prune_history)
             for feed in GTFS_STATIC:
                 await asyncio.to_thread(maybe_reload, feed, True)  # recarga diaria forzada
+            await asyncio.to_thread(run_geo)  # reclasificar tras recarga
         except Exception:
             log.exception("maintenance failed")
 
@@ -146,6 +148,12 @@ async def main():
         await asyncio.to_thread(_backfill_flags)
     except Exception:
         log.exception("trip_flags backfill failed")
+    # conciliación territorial (catálogos oficiales Renfe)
+    try:
+        st = await asyncio.to_thread(run_geo)
+        log.info("geo reconcile: %s", st)
+    except Exception:
+        log.exception("geo reconcile failed")
     await asyncio.gather(
         rt_trip_loop(), rt_vehicle_loop(), fleet_loop(), alerts_loop(),
         static_loop(), maintenance_loop(), push_loop(),

@@ -54,9 +54,10 @@ class TestHaversine:
         d = _haversine_m(40.4066, -3.6894, 40.4720, -3.6823)
         assert 6000 < d < 8000
 
-    def test_none_coords_neutral(self):
-        # sin coords: distancia 0 => se agrupan por nombre (comportamiento previo)
-        assert _haversine_m(None, None, 40.4, -3.68) == 0.0
+    def test_none_coords_never_merge(self):
+        # sin coords: distancia desconocida => NUNCA fusionar homónimos
+        assert _haversine_m(None, None, 40.4, -3.68) is None
+        assert _haversine_m(40.4, -3.68, None, -3.68) is None
 
 
 class TestSemidirect:

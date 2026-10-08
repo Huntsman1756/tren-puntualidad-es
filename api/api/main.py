@@ -109,10 +109,12 @@ def _window(date_s: str | None, time_s: str | None, minutes: int):
     return day, t0, t0 + minutes * 60, day == today
 
 
-def _haversine_m(lat1, lon1, lat2, lon2) -> float:
+def _haversine_m(lat1, lon1, lat2, lon2) -> float | None:
+    """Distancia en metros. None si falta alguna coordenada — jamás 0:
+    sin coords no se puede justificar una fusión de estaciones."""
     import math
     if None in (lat1, lon1, lat2, lon2):
-        return 0.0
+        return None
     R = 6371000
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
@@ -177,12 +179,18 @@ def meta_coverage():
 
 
 @v1.get("/stations/search")
-def stations_search(q: str = Query(min_length=2), limit: int = 15):
+def stations_search(q: str = Query(min_length=2), limit: int = 15,
+                    ccaa: str | None = None, provincia: str | None = None):
     """Búsqueda agrupada: estaciones físicas con mismo nombre en ambas
-    redes se devuelven como un único resultado con varias paradas."""
+    redes se devuelven como un único resultado con varias paradas.
+    `ccaa`/`provincia` (slug) restringen territorialmente."""
     nq = _norm(q.strip())
+    geo = _geo_rows()
+    pool = _stations()
+    if ccaa or provincia:
+        pool = [s for s in pool if _in_territory(geo, s, ccaa, provincia)]
     starts, contains = [], []
-    for s in _stations():
+    for s in pool:
         nn = _norm(s["name"])
         if nn.startswith(nq):
             starts.append(s)
@@ -198,7 +206,7 @@ def stations_search(q: str = Query(min_length=2), limit: int = 15):
         merged = False
         for g in groups.get(key, []):
             d = _haversine_m(g["lat"], g["lon"], s["lat"], s["lon"])
-            if d < 1500:
+            if d is not None and d < 1500:
                 g["stops"].append({"feed": s["feed"], "stop_id": s["stop_id"]})
                 merged = True
                 break
@@ -210,6 +218,10 @@ def stations_search(q: str = Query(min_length=2), limit: int = 15):
         out.append(g)
     for g in out[:limit]:
         g["networks"] = [FEED_LABELS.get(st["feed"], st["feed"]) for st in g["stops"]]
+        gr = geo.get((g["stops"][0]["feed"], g["stops"][0]["stop_id"]))
+        if gr:
+            g["provincia"] = gr["provincia"]
+            g["poblacion"] = gr["poblacion"]
     return out[:limit]
 
 
@@ -326,8 +338,17 @@ def station(feed: str, stop_id: str):
             {"f": feed, "s": stop_id}).mappings().first()
     if not s:
         raise HTTPException(404, "station not found")
+    g = _geo_rows().get((feed, stop_id))
     return {"feed": feed, "stop_id": stop_id,
-            "network": FEED_LABELS.get(feed, feed), **dict(s)}
+            "network": FEED_LABELS.get(feed, feed), **dict(s),
+            "geo": {
+                "poblacion": g["poblacion"],
+                "provincia": g["provincia"],
+                "provincia_slug": _slug_prov(g["provincia"]),
+                "ccaa": g["ccaa"],
+                "ccaa_slug": _slug_ccaa(g["ccaa_code"]),
+                "source": g["source"],
+            } if g and g["cpro"] else None}
 
 
 def _feed_ts(feeds: set[str]):
@@ -591,7 +612,21 @@ def train(feed: str, trip_id: str):
 
 @v1.get("/delays/ranking")
 def ranking(limit: int = Query(50, ge=1, le=200), min_delay: int = 60,
-            feed: str | None = None):
+            feed: str | None = None,
+            ccaa: str | None = None, provincia: str | None = None):
+    """Ranking por retraso. `ccaa`/`provincia` (slug) filtran por la
+    posición RT del tren (next_stop o última posición de flota) —
+    semántica definida por la localización reportada, no por el recorrido."""
+    geo_filter = None
+    if ccaa or provincia:
+        geo = _geo_rows()
+        geo_filter = {k for k, g in geo.items()
+                      if g["active"] and (
+                          (ccaa and _slug_ccaa(g["ccaa_code"]) == ccaa)
+                          or (provincia
+                              and _slug_prov(g["provincia"] or "") == provincia))}
+        if not geo_filter:
+            return []
     sql = text("""
         SELECT rt.feed, rt.trip_id,
                GREATEST(rt.delay, COALESCE(fl.delay_min,0)*60) AS delay,
@@ -617,6 +652,8 @@ def ranking(limit: int = Query(50, ge=1, le=200), min_delay: int = 60,
     with engine.connect() as c:
         rows = c.execute(sql, {"mind": min_delay, "now": int(time.time()),
                                "feed": feed, "lim": limit}).mappings().all()
+    if geo_filter is not None:
+        rows = [r for r in rows if (r["feed"], r["next_stop_id"]) in geo_filter]
     return [dict(r) for r in rows]
 
 
@@ -707,6 +744,181 @@ def data_status():
         "stations_by_feed": {r[0]: r[1] for r in cov},
         "active_rt_trips": {r[0]: r[1] for r in rt},
     }
+
+
+def _in_territory(geo, stop_row, ccaa_slug, prov_slug):
+    g = geo.get((stop_row["feed"], stop_row["stop_id"]))
+    if not g:
+        return False
+    if ccaa_slug and _slug_ccaa(g["ccaa_code"]) != ccaa_slug:
+        return False
+    return not (prov_slug and _slug_prov(g["provincia"] or "") != prov_slug)
+
+
+# ---------- territorio (v0.3.1): CCAA/provincia/localidad ----------
+
+def _tslug(s: str) -> str:
+    n = _norm(s or "").replace("/", " ").replace(",", " ")
+    return re.sub(r"[^a-z0-9]+", "-", n).strip("-")
+
+
+def _geo_rows():
+    """geo_station indexada por (feed, stop_id). Cache 300 s."""
+    if not hasattr(_geo_rows, "c"):
+        _geo_rows.c = {"ts": 0, "rows": {}}
+    if time.time() - _geo_rows.c["ts"] > 300:
+        try:
+            with engine.connect() as c:
+                rows = c.execute(text("""
+                    SELECT feed, stop_id, cpro, provincia, ccaa_code, ccaa,
+                           poblacion, source, active FROM geo_station
+                """)).mappings().all()
+            _geo_rows.c["rows"] = {(r["feed"], r["stop_id"]): dict(r) for r in rows}
+            _geo_rows.c["ts"] = time.time()
+        except Exception:
+            _geo_rows.c["rows"] = {}
+    return _geo_rows.c["rows"]
+
+
+def _geo_items(ccaa_slug=None, prov_slug=None, q=None):
+    """Estaciones físicas (dedup por stop_id entre feeds) con territorio."""
+    geo = _geo_rows()
+    by_stop: dict = {}
+    for (feed, stop_id), g in geo.items():
+        if not g["active"]:
+            continue
+        ent = by_stop.setdefault(stop_id, {
+            "feeds": [], "name": None, "lat": None, "lon": None,
+            "cpro": g["cpro"], "provincia": g["provincia"],
+            "ccaa_code": g["ccaa_code"], "ccaa": g["ccaa"],
+            "poblacion": g["poblacion"], "source": g["source"]})
+        ent["feeds"].append(feed)
+    # nombres/coords del GTFS
+    for s in _stations():
+        ent = by_stop.get(s["stop_id"])
+        if ent and ent["name"] is None:
+            ent["name"], ent["lat"], ent["lon"] = s["name"], s["lat"], s["lon"]
+    items = [{"stop_id": sid, **e} for sid, e in by_stop.items() if e["name"]]
+    if ccaa_slug:
+        items = [i for i in items if _slug_ccaa(i["ccaa_code"]) == ccaa_slug]
+    if prov_slug:
+        items = [i for i in items
+                 if _slug_prov(i["provincia"] or "") == prov_slug]
+    if q:
+        nq = _norm(q)
+        items = [i for i in items
+                 if nq in _norm(i["name"] or "")
+                 or nq in _norm(i["poblacion"] or "")]
+    return sorted(items, key=lambda i: (i["provincia"] or "", i["name"]))
+
+
+# slugs canónicos por CAUTO INE (estables para URLs públicas)
+_CCAA_SLUGS = {
+    "01": "andalucia", "02": "aragon", "03": "asturias", "04": "illes-balears",
+    "05": "canarias", "06": "cantabria", "07": "castilla-y-leon",
+    "08": "castilla-la-mancha", "09": "cataluna", "10": "valencia",
+    "11": "extremadura", "12": "galicia", "13": "madrid", "14": "murcia",
+    "15": "navarra", "16": "pais-vasco", "17": "la-rioja",
+    "18": "ceuta", "19": "melilla",
+}
+
+
+def _slug_ccaa(x):
+    """x = ccaa_code ('13') o nombre; devuelve slug canónico."""
+    if x in _CCAA_SLUGS:
+        return _CCAA_SLUGS[x]
+    return _tslug(x or "")
+
+
+def _slug_prov(name):
+    base = _tslug(name)
+    return {"coruna-a": "a-coruna", "rioja-la": "la-rioja",
+            "palmas-las": "las-palmas",
+            "santa-cruz-de-tenerife": "santa-cruz-de-tenerife"}.get(base, base)
+
+
+@v1.get("/geo/ccaa")
+def geo_ccaa():
+    """Comunidades autónomas con estaciones clasificadas (conteo por
+    stop_id físico, sin duplicar feeds)."""
+    items = _geo_items()
+    agg: dict = {}
+    for i in items:
+        if not i["ccaa_code"]:
+            continue
+        k = i["ccaa_code"]
+        a = agg.setdefault(k, {"code": k, "name": i["ccaa"],
+                               "slug": _slug_ccaa(k), "stations": 0})
+        a["stations"] += 1
+    return sorted(agg.values(), key=lambda x: x["name"])
+
+
+@v1.get("/geo/ccaa/{slug}")
+def geo_ccaa_detail(slug: str):
+    items = _geo_items(ccaa_slug=slug)
+    if not items:
+        raise HTTPException(404, "comunidad no encontrada o sin estaciones")
+    provs: dict = {}
+    for i in items:
+        if not i["cpro"]:
+            continue
+        p = provs.setdefault(i["cpro"], {"cpro": i["cpro"], "name": i["provincia"],
+                                         "slug": _slug_prov(i["provincia"] or ""),
+                                         "stations": 0})
+        p["stations"] += 1
+    return {"name": items[0]["ccaa"], "code": items[0]["ccaa_code"],
+            "slug": slug,
+            "provinces": sorted(provs.values(), key=lambda x: x["name"]),
+            "stations": len(items)}
+
+
+@v1.get("/geo/provincia/{slug}")
+def geo_provincia(slug: str, page: int = Query(1, ge=1),
+                  size: int = Query(60, ge=1, le=300)):
+    items = _geo_items(prov_slug=slug)
+    if not items:
+        raise HTTPException(404, "provincia no encontrada o sin estaciones")
+    return {
+        "provincia": items[0]["provincia"], "cpro": items[0]["cpro"],
+        "ccaa": items[0]["ccaa"], "ccaa_slug": _slug_ccaa(items[0]["ccaa_code"]),
+        "slug": slug,
+        "total": len(items),
+        "page": page, "size": size,
+        "items": items[(page - 1) * size: page * size],
+    }
+
+
+@v1.get("/geo/estaciones")
+def geo_estaciones(ccaa: str | None = None, provincia: str | None = None,
+                   q: str | None = None,
+                   page: int = Query(1, ge=1),
+                   size: int = Query(60, ge=1, le=300)):
+    items = _geo_items(ccaa_slug=ccaa, prov_slug=provincia, q=q)
+    return {"total": len(items), "page": page, "size": size,
+            "items": items[(page - 1) * size: page * size]}
+
+
+@v1.get("/geo/coverage")
+def geo_coverage():
+    """Informe de cobertura territorial por feed."""
+    geo = _geo_rows()
+    feeds: dict = {}
+    for (feed, _sid), g in geo.items():
+        if not g["active"]:
+            continue
+        f = feeds.setdefault(feed, {"total": 0, "catalogo": 0,
+                                    "cartociudad": 0, "geo_inferida": 0,
+                                    "catalogo_nombre": 0,
+                                    "sin_clasificar": 0, "exterior": 0})
+        f["total"] += 1
+        src = g["source"] or "sin_clasificar"
+        if src == "catalogo" and not g["cpro"]:
+            f["exterior"] += 1
+        elif src in f:
+            f[src] += 1
+        else:
+            f["sin_clasificar"] += 1
+    return feeds
 
 
 # ---------- web push (v0.3): suscripciones anónimas, borrado inmediato ----------

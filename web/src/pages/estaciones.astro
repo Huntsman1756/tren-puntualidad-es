@@ -1,0 +1,34 @@
+---
+import Base from '../layouts/Base.astro';
+import TerritoryExplorer from '../components/TerritoryExplorer.svelte';
+import { api } from '../lib/api';
+
+let ccaa: any[] = [];
+try { ccaa = await (await fetch(`${process.env.API_INTERNAL_URL || 'http://localhost:8000'}/api/v1/geo/ccaa`)).json(); } catch {}
+---
+<Base title="Estaciones por territorio — Trenes a tiempo"
+    description="Explora todas las estaciones Renfe por comunidad autónoma, provincia y población."
+    canonical="/estaciones">
+  <nav class="breadcrumb"><a href="/">← Inicio</a></nav>
+  <h1>Estaciones por territorio</h1>
+
+  <div class="card">
+    <TerritoryExplorer client:load />
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Comunidades autónomas</h2>
+    <ul class="cc">
+      {ccaa.map((c: any) => (
+        <li><a href={`/comunidades/${c.slug}`}>{c.name}</a>
+          <span class="muted">{c.stations} estaciones</span></li>
+      ))}
+    </ul>
+  </div>
+</Base>
+<style>
+  .cc { columns: 2; column-gap: 2rem; list-style: none; padding: 0; margin: 0; }
+  .cc li { margin: .3rem 0; display: flex; justify-content: space-between; gap: .6rem; }
+  .cc .muted { font-size: .8rem; }
+  @media (max-width: 560px) { .cc { columns: 1; } }
+</style>
