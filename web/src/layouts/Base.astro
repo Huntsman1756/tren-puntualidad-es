@@ -37,6 +37,7 @@ const canonicalUrl = canonical ? new URL(canonical, site).href : Astro.url.href;
     header.site { border-bottom: 1px solid var(--border); padding: .8rem 1rem; }
     header.site .wrap { display: flex; gap: 1.2rem; align-items: baseline; flex-wrap: wrap; }
     header.site a.brand { color: var(--text); font-weight: 700; font-size: 1.1rem; }
+    nav { display: flex; gap: 1rem; }
     nav a { color: var(--muted); font-size: .9rem; }
     nav a:hover { color: var(--text); }
     .card { background: var(--card); border: 1px solid var(--border);
