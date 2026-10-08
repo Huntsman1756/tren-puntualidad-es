@@ -41,7 +41,12 @@ import Base from '../layouts/Base.astro';
       <li>No existe feed oficial de <strong>llegada efectiva</strong>: no mostramos
           llegadas observadas como hechos, solo estimaciones.</li>
       <li>La vía/andén solo se muestra cuando Renfe la publica.</li>
-      <li>Los trayectos solo cubren servicios <strong>directos</strong> (sin transbordo).</li>
+      <li>Los trayectos solo cubren servicios <strong>directos</strong>. Si ningún tren
+          del horario vigente une origen y destino, lo indicamos como «requiere transbordo»;
+          no calculamos ni inventamos conexiones.</li>
+      <li>El ranking en vivo y el resumen por línea son una <strong>foto del momento</strong>
+          del retraso informado, no puntualidad histórica. La cobertura por línea compara
+          los trenes con dato en tiempo real con los que, según horario, circulan ahora.</li>
       <li>La marca <strong>«semi»</strong> (semidirecto) es una inferencia sobre
           <code>stop_times</code>: trenes que comparten origen y destino con el
           patrón mayoritario de su línea pero omiten 2 o más paradas interiores.
@@ -51,6 +56,43 @@ import Base from '../layouts/Base.astro';
           (Cercanías ~4 semanas, larga distancia ~6); fuera de cobertura no hay
           resultados. En fechas futuras solo se muestra el <strong>horario
           programado</strong>, nunca retrasos del día en curso.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Líneas y núcleos</h2>
+    <ul>
+      <li>Los códigos comerciales se repiten entre núcleos (hay una C1 en Madrid, Asturias,
+          Sevilla, Valencia…). Cada línea se identifica por <strong>operador, núcleo, red
+          (feed), identificador de ruta GTFS y código comercial</strong>.</li>
+      <li>El núcleo se obtiene del <code>route_id</code> oficial del GTFS de Cercanías (los
+          dos primeros dígitos codifican el núcleo; Rodalies usa 51 en el GTFS y 50 en el
+          visor) y se <strong>contrasta</strong> con el núcleo que el visor oficial de Renfe
+          asigna a cada estación de la ruta. Si las estaciones apuntan a otro núcleo, la
+          ruta no se asigna y queda en la auditoría
+          (<a href="/api/v1/lineas-audit">/api/v1/lineas-audit</a>).</li>
+      <li>Nunca deducimos el núcleo por la provincia ni por el código comercial.</li>
+      <li>Variantes como C4a/C4b se agrupan en su familia (C4) sin perder su identidad.</li>
+      <li>Algunas rutas de Rodalies citadas en los avisos no están en el GTFS publicado:
+          se identifican solo por el formato oficial de su <code>route_id</code> y así se indica.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Incidencias</h2>
+    <ul>
+      <li>Procedencia: feed GTFS-RT <em>Service Alerts</em> de Renfe (solo Cercanías y
+          Rodalies; para AV/LD Renfe no publica avisos en este formato).</li>
+      <li>Respetamos el alcance oficial (<code>informedEntity</code>): un aviso de una
+          estación no se presenta como incidencia de toda la línea. Cuando un aviso de línea
+          nombra una estación concreta en su texto lo indicamos como <em>inferido del
+          texto</em>, sin cambiar su alcance oficial.</li>
+      <li>La clasificación (accesibilidad, obras programadas, servicio interrumpido,
+          servicio alternativo, otras) usa <code>effect</code>/<code>cause</code> oficiales
+          si existen y, si no, reglas de texto explícitas; cada etiqueta muestra su motivo.
+          No asignamos severidades que Renfe no publica.</li>
+      <li>Distinguimos <strong>fuente operativa sin avisos</strong>, <strong>fuente
+          caída</strong> y <strong>cobertura desconocida</strong>.</li>
     </ul>
   </div>
 

@@ -29,3 +29,19 @@ def test_parse_stops_bad_feed():
 def test_parse_stops_empty():
     with pytest.raises(Exception):
         _parse_stops_param("")
+
+
+def test_rate_limit_key_uses_proxy_ip_and_exempts_internal_ssr():
+    from types import SimpleNamespace
+
+    from api.main import _rl_key
+
+    def req(host, xff=None):
+        return SimpleNamespace(client=SimpleNamespace(host=host),
+                               headers={"x-forwarded-for": xff} if xff else {})
+    assert _rl_key(req("172.18.0.5")) is None              # SSR interno
+    assert _rl_key(req("127.0.0.1")) is None
+    assert _rl_key(req("172.18.0.2", "1.2.3.4")) == "1.2.3.4"
+    # el cliente no puede elegir su clave anteponiendo IPs falsas
+    assert _rl_key(req("172.18.0.2", "9.9.9.9, 1.2.3.4")) == "1.2.3.4"
+    assert _rl_key(req("8.8.8.8")) == "8.8.8.8"

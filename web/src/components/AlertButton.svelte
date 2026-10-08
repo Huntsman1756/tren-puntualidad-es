@@ -1,167 +1,169 @@
 <script>
-  // Suscripción Web Push anónima. Sin cuentas: el endpoint lo genera el
-  // navegador; guardar la clave en localStorage permite la baja inmediata.
+  // Avisos Web Push del contexto actual (trayecto o estación). Un mismo
+  // navegador puede tener varias reglas independientes (p. ej. ida por la
+  // mañana y vuelta por la tarde); borrar una no afecta a las demás.
   import { onMount } from 'svelte';
   import { PUBLIC_API } from '../lib/api';
+  import {
+    createRule, deleteRule, listRules, migrateLegacy, pushSupported,
+    sameContext, updateRule,
+  } from '../lib/push';
 
-  // cfg: { type:'journey'|'station', from_key?, to_key?, station_key? }
-  export let cfg = {};
+  export let cfg = {};     // { type, from_key?, to_key?, station_key? }
   export let label = '';
 
-  const LS_KEY = 'tt_push_subs';   // { [cfgHash]: endpoint }
-  let supported = false;
-  let subscribed = false;
-  let busy = false;
-  let showCfg = false;
-  let threshold = 5;
-  let fromTime = '07:00';
-  let toTime = '09:30';
-  let daysSel = [1, 2, 3, 4, 5];   // L-V (0=domingo)
-  let denied = false;
-  let disabled = false;
+  let supported = false, disabled = false, denied = false, busy = false;
+  let error = '';
+  let rules = [];          // reglas de este contexto
+  let editing = null;      // null | 'new' | rule.id
+  let form = defaults();
 
   const DAYNAMES = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
   const DOW = [1, 2, 3, 4, 5, 6, 0];
 
-  function cfgHash() { return JSON.stringify([cfg.type, cfg.from_key || cfg.station_key, cfg.to_key]); }
-  function readSubs() {
-    try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch { return {}; }
+  function defaults() {
+    return { threshold_min: 5, from_time: '07:00', to_time: '09:30', days: [1, 2, 3, 4, 5] };
+  }
+
+  async function refresh() {
+    try { rules = (await listRules()).filter((r) => sameContext(r.config, cfg)); }
+    catch { error = 'No se pudieron cargar tus avisos.'; }
   }
 
   onMount(async () => {
-    supported = 'serviceWorker' in navigator && 'PushManager' in window;
+    supported = pushSupported();
     if (!supported) return;
-    const subs = readSubs();
-    subscribed = !!subs[cfgHash()];
     try {
       const r = await fetch(`${PUBLIC_API}/api/v1/push/public-key`);
-      if (!r.ok) disabled = true;
-    } catch { disabled = true; }
+      if (!r.ok) { disabled = true; return; }
+    } catch { disabled = true; return; }
+    await migrateLegacy();
+    await refresh();
   });
 
-  function b64ToUint8(b64) {
-    const pad = '='.repeat((4 - b64.length % 4) % 4);
-    const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
-    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  function startNew() { form = defaults(); editing = 'new'; error = ''; }
+  function startEdit(r) {
+    form = { threshold_min: r.config.threshold_min ?? 5,
+             from_time: r.config.from_time || '00:00',
+             to_time: r.config.to_time || '23:59',
+             days: r.config.days?.length ? [...r.config.days] : [0, 1, 2, 3, 4, 5, 6] };
+    editing = r.id; error = '';
   }
 
-  async function subscribe() {
-    busy = true;
-    try {
-      const perm = await Notification.requestPermission();
-      if (perm !== 'granted') { denied = true; return; }
-      const { key } = await (await fetch(`${PUBLIC_API}/api/v1/push/public-key`)).json();
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: b64ToUint8(key),
-      });
-      const payload = {
-        endpoint: sub.endpoint,
-        keys: sub.toJSON().keys,
-        config: {
-          ...cfg,
-          threshold_min: threshold,
-          from_time: fromTime, to_time: toTime,
-          days: daysSel.length === 7 ? [] : daysSel,
-        },
-      };
-      const r = await fetch(`${PUBLIC_API}/api/v1/push/subscribe`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!r.ok) throw new Error('subscribe ' + r.status);
-      const subs = readSubs();
-      subs[cfgHash()] = sub.endpoint;
-      localStorage.setItem(LS_KEY, JSON.stringify(subs));
-      subscribed = true; showCfg = false;
-    } catch (e) { console.warn(e); }
-    finally { busy = false; }
+  function payload() {
+    return { ...cfg, label, threshold_min: Number(form.threshold_min),
+             from_time: form.from_time, to_time: form.to_time,
+             days: form.days.length === 7 ? [] : form.days };
   }
 
-  async function unsubscribe() {
-    busy = true;
+  async function save() {
+    busy = true; error = '';
     try {
-      const subs = readSubs();
-      const endpoint = subs[cfgHash()];
-      if (endpoint) {
-        await fetch(`${PUBLIC_API}/api/v1/push/unsubscribe`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ endpoint }),
-        }).catch(() => {});
-        try {
-          const reg = await navigator.serviceWorker.ready;
-          (await reg.pushManager.getSubscription())?.unsubscribe();
-        } catch {}
-        delete subs[cfgHash()];
-        localStorage.setItem(LS_KEY, JSON.stringify(subs));
-      }
-      subscribed = false;
+      if (editing === 'new') await createRule(payload());
+      else await updateRule(editing, payload());
+      editing = null;
+      await refresh();
+    } catch (e) {
+      if (e?.denied) denied = true;
+      else error = e?.status === 409 ? 'Has alcanzado el máximo de avisos.' : 'No se pudo guardar el aviso.';
     } finally { busy = false; }
   }
 
+  async function remove(id) {
+    busy = true; error = '';
+    try { await deleteRule(id); await refresh(); if (editing === id) editing = null; }
+    catch { error = 'No se pudo borrar el aviso.'; }
+    finally { busy = false; }
+  }
+
   function toggleDay(d) {
-    daysSel = daysSel.includes(d) ? daysSel.filter((x) => x !== d) : [...daysSel, d].sort();
+    form.days = form.days.includes(d) ? form.days.filter((x) => x !== d) : [...form.days, d].sort();
+  }
+
+  function summary(r) {
+    const c = r.config;
+    const days = c.days?.length ? c.days.slice().sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7))
+      .map((d) => DAYNAMES[d]).join('') : 'todos los días';
+    return `+${c.threshold_min} min · ${c.from_time || '00:00'}–${c.to_time || '23:59'} · ${days}`;
   }
 </script>
 
 {#if supported && !disabled}
-  {#if subscribed}
-    <div class="sub-ok">
-      <button class="ab on" on:click={unsubscribe} disabled={busy}>
-        🔔 Alertas activas{label ? ` · ${label}` : ''}</button>
-    </div>
-  {:else if !showCfg}
-    <button class="ab" on:click={() => (showCfg = true)} disabled={busy}>
-      🔕 Avisar si hay retrasos</button>
-    {#if denied}<p class="denied muted">Notificaciones bloqueadas en el navegador.</p>{/if}
-  {:else}
-    <div class="cfg">
-      <p class="muted cfg-t">Avisar en {label || 'este contexto'} cuando un tren próximo acumule:</p>
-      <div class="row">
-        <label>Umbral
-          <select bind:value={threshold}>
-            <option value={3}>+3 min</option>
-            <option value={5}>+5 min</option>
-            <option value={10}>+10 min</option>
-            <option value={15}>+15 min</option>
-          </select>
-        </label>
-        <label>Desde <input type="time" bind:value={fromTime} /></label>
-        <label>Hasta <input type="time" bind:value={toTime} /></label>
+  <div class="alerts-box">
+    {#each rules as r (r.id)}
+      <div class="rule">
+        <span class="on">🔔</span>
+        <span class="sum">{summary(r)}</span>
+        <button class="tool" on:click={() => startEdit(r)} disabled={busy}
+                aria-label="Editar aviso">Editar</button>
+        <button class="tool danger" on:click={() => remove(r.id)} disabled={busy}
+                aria-label="Borrar este aviso">Borrar</button>
       </div>
-      <div class="days">
-        {#each DOW as d}
-          <button type="button" class="d" class:on={daysSel.includes(d)}
-                  on:click={() => toggleDay(d)}>{DAYNAMES[d]}</button>
-        {/each}
+    {/each}
+    {#if editing === null}
+      <button class="ab" on:click={startNew} disabled={busy}>
+        {rules.length ? '＋ Otro aviso para este contexto' : '🔕 Avisar si hay retrasos'}</button>
+    {/if}
+    {#if denied}<p class="note muted" role="alert">Notificaciones bloqueadas en el navegador.</p>{/if}
+    {#if error}<p class="note err" role="alert">{error}</p>{/if}
+
+    {#if editing !== null}
+      <div class="cfg">
+        <p class="muted cfg-t">Avisar en {label || 'este contexto'} cuando un tren próximo
+          acumule (solo con dato en tiempo real, nunca por horario teórico):</p>
+        <div class="row">
+          <label>Umbral
+            <select bind:value={form.threshold_min}>
+              <option value={3}>+3 min</option>
+              <option value={5}>+5 min</option>
+              <option value={10}>+10 min</option>
+              <option value={15}>+15 min</option>
+            </select>
+          </label>
+          <label>Desde <input type="time" bind:value={form.from_time} /></label>
+          <label>Hasta <input type="time" bind:value={form.to_time} /></label>
+        </div>
+        <div class="days" role="group" aria-label="Días">
+          {#each DOW as d}
+            <button type="button" class="d" class:on={form.days.includes(d)}
+                    aria-pressed={form.days.includes(d)} on:click={() => toggleDay(d)}>{DAYNAMES[d]}</button>
+          {/each}
+        </div>
+        <div class="ops">
+          <button class="save" on:click={save} disabled={busy || form.days.length === 0}>
+            {busy ? '…' : editing === 'new' ? 'Activar aviso' : 'Guardar cambios'}</button>
+          <button class="tool" on:click={() => (editing = null)}>Cancelar</button>
+        </div>
+        <p class="muted legal">Sin cuenta ni correo: el aviso queda ligado a este navegador
+          mediante una clave que solo guarda él. Gestiona todos tus avisos en
+          <a href="/favoritos#avisos">Favoritos</a> · <a href="/privacidad">privacidad</a>.</p>
       </div>
-      <div class="ops">
-        <button class="save" on:click={subscribe} disabled={busy || daysSel.length === 0}>
-          {busy ? '…' : 'Activar avisos'}</button>
-        <button class="tool" on:click={() => (showCfg = false)}>Cancelar</button>
-      </div>
-      <p class="muted legal">Sin cuenta ni correo: la suscripción vive en tu navegador.
-        Borrado inmediato desde el botón o <a href="/privacidad">privacidad</a>.</p>
-    </div>
-  {/if}
+    {/if}
+  </div>
 {/if}
 
 <style>
-  .ab { background: none; border: 1px solid var(--border); color: var(--muted);
-        border-radius: 8px; padding: .3rem .8rem; cursor: pointer; font-size: .85rem; }
-  .ab.on { color: var(--ok); border-color: var(--ok); }
-  .denied { font-size: .78rem; margin: .3rem 0 0; }
+  .alerts-box { display: flex; flex-direction: column; gap: .4rem; margin: .3rem 0; }
+  .rule { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; font-size: .82rem;
+          border: 1px solid var(--ok); border-radius: 8px; padding: .3rem .6rem; }
+  .rule .sum { flex: 1; color: var(--text); }
+  .ab { align-self: flex-start; background: none; border: 1px solid var(--border);
+        color: var(--muted); border-radius: 8px; padding: .3rem .8rem; cursor: pointer;
+        font-size: .85rem; }
+  .tool { font-size: .75rem; color: var(--muted); border: 1px solid var(--border);
+          background: transparent; border-radius: 7px; padding: .2rem .55rem; cursor: pointer; }
+  .tool.danger:hover { color: var(--bad); border-color: var(--bad); }
+  .note { font-size: .78rem; margin: 0; }
+  .err { color: var(--bad); }
   .cfg { border: 1px solid var(--border); border-radius: 10px; padding: .8rem;
-         margin-top: .6rem; display: flex; flex-direction: column; gap: .65rem;
-         background: var(--card2); }
+         display: flex; flex-direction: column; gap: .65rem; background: var(--card2); }
   .cfg-t { font-size: .82rem; margin: 0; }
   .row { display: flex; gap: .6rem; flex-wrap: wrap; }
   .row label { display: flex; flex-direction: column; gap: .2rem; font-size: .78rem;
                color: var(--muted); }
   .row input, .row select { font-size: .85rem; padding: .35rem .5rem; width: auto; }
   .days { display: flex; gap: .3rem; }
-  .d { width: 1.9rem; height: 1.9rem; border-radius: 50%; border: 1px solid var(--border);
+  .d { width: 2.1rem; height: 2.1rem; border-radius: 50%; border: 1px solid var(--border);
        background: transparent; color: var(--muted); cursor: pointer; font-size: .78rem; }
   .d.on { background: var(--accent); color: var(--accent-fg); border-color: transparent;
           font-weight: 700; }

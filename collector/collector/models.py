@@ -208,8 +208,102 @@ class GeoStation(Base):
     active = Column(Integer, default=1)
 
 
+class StationNucleo(Base):
+    """Contraste oficial: núcleo de Cercanías por CODIGO_ESTACION según el
+    geojson del visor Renfe. Se sustituye solo si la descarga tiene datos."""
+    __tablename__ = "station_nucleo"
+    code = Column(String(12), primary_key=True)   # CODIGO_ESTACION (5 díg.)
+    nucleo_code = Column(String(4))
+    lineas = Column(Text)                          # LINEAS oficiales
+    fetched_at = Column(BigInteger)
+
+
+class LineRoute(Base):
+    """Identidad canónica de cada route_id GTFS (ver collector/lines.py).
+
+    nucleo_code NULL = no asignable de forma verificable (status explica
+    por qué). line_code es el código comercial con grafía oficial;
+    family_code agrupa variantes (C4a, C4b -> C4)."""
+    __tablename__ = "line_route"
+    feed = Column(String(8), primary_key=True)
+    route_id = Column(String(64), primary_key=True)
+    nucleo_code = Column(String(4))
+    line_code = Column(String(16))
+    line_slug = Column(String(16))
+    family_code = Column(String(16))
+    family_slug = Column(String(16))
+    mode = Column(String(8))               # tren | bus
+    status = Column(String(16))            # verified|prefix_only|conflict|unmapped|not_applicable
+    evidence = Column(JSONB)
+    long_name = Column(Text)
+    color = Column(String(8))
+    text_color = Column(String(8))
+    n_trips = Column(Integer, default=0)   # viajes en el GTFS vigente
+    updated_at = Column(BigInteger)
+
+
+Index("ix_line_route_line", LineRoute.nucleo_code, LineRoute.family_slug)
+
+
+class TripSpan(Base):
+    """Primera salida / última llegada programada de cada viaje."""
+    __tablename__ = "trip_span"
+    feed = Column(String(8), primary_key=True)
+    trip_id = Column(String(64), primary_key=True)
+    first_dep = Column(Integer)
+    last_arr = Column(Integer)
+    n_stops = Column(Integer)
+
+
+class AlertSeen(Base):
+    """Histórico de avisos oficiales: cada alert_id con la última versión
+    del payload y cuándo se vio por primera y última vez en el feed."""
+    __tablename__ = "alerts_seen"
+    feed = Column(String(8), primary_key=True)
+    alert_id = Column(String(128), primary_key=True)
+    payload = Column(JSONB)
+    first_seen = Column(BigInteger)
+    last_seen = Column(BigInteger)
+
+
+Index("ix_alerts_seen_last", AlertSeen.last_seen)
+
+
+class PushDevice(Base):
+    """Un navegador/dispositivo suscrito a Web Push.
+
+    La credencial de posesión es un token aleatorio entregado una sola vez
+    al registrar el dispositivo; solo se guarda su SHA-256. token_hash NULL
+    = dispositivo migrado de push_subs (v0.3.x) aún no reclamado."""
+    __tablename__ = "push_devices"
+    id = Column(String(36), primary_key=True)
+    endpoint = Column(Text, unique=True, nullable=False)
+    p256dh = Column(Text, nullable=False)
+    auth = Column(Text, nullable=False)
+    token_hash = Column(String(64))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at = Column(DateTime(timezone=True))
+
+
+class PushRule(Base):
+    """Regla de aviso independiente de un dispositivo (trayecto o estación).
+    Borrar una regla no afecta a las demás ni al dispositivo."""
+    __tablename__ = "push_rules"
+    id = Column(String(36), primary_key=True)
+    device_id = Column(String(36), nullable=False, index=True)
+    config = Column(JSONB, nullable=False)
+    enabled = Column(Integer, default=1)
+    last_notify_key = Column(Text)
+    last_notify_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class PushSub(Base):
-    """Suscripción Web Push anónima. Sin cuentas: la clave es el endpoint
+    """LEGACY (v0.3.0-0.3.3): una fila por endpoint, una sola config.
+    Se migra a push_devices/push_rules al arrancar y ya no se escribe.
+
+    Suscripción Web Push anónima. Sin cuentas: la clave es el endpoint
     (opaco, controlado por el navegador). Borrado inmediato al darse de baja
     o cuando el push devuelve 404/410."""
     __tablename__ = "push_subs"

@@ -1,30 +1,36 @@
 """API pública de puntualidad ferroviaria Renfe (v1)."""
-import json
+import ipaddress
 import os
 import re
 import time
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from api.common import line_info, reset_caches
 from api.db import engine
+from api.incidents import query as incidents_query
+from api.incidents import router as incidents_router
+from api.lines_api import live_trains
+from api.lines_api import router as lines_router
+from api.lines_api import station_lines as _station_lines
+from api.push_api import router as push_router
 
 TZ = ZoneInfo("Europe/Madrid")
 FEED_LABELS = {"cer": "Cercanías/Rodalies", "ld": "AV · Larga y Media Distancia"}
 ALLOWED_ORIGINS = [o.strip() for o in
                    os.environ.get("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 
-app = FastAPI(title="Puntualidad Renfe API", version="1.0.0")
+app = FastAPI(title="Puntualidad Renfe API", version="1.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -33,9 +39,31 @@ _rl: dict[str, list[float]] = {}
 RL_LIMIT = int(os.environ.get("RATE_LIMIT_PER_MIN", "120"))
 
 
+def _rl_key(request: Request) -> str | None:
+    """Clave del limitador.
+
+    - Detrás de Traefik/Caddy: la IP real es la ÚLTIMA de X-Forwarded-For
+      (la añade nuestro proxy; las anteriores las controla el cliente).
+    - Sin X-Forwarded-For y desde red privada/loopback: es el SSR de la web
+      (una sola IP para todos los usuarios) -> sin límite (None).
+    """
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip() or "?"
+    host = request.client.host if request.client else "?"
+    try:
+        if ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback:
+            return None
+    except ValueError:
+        pass
+    return host
+
+
 @app.middleware("http")
 async def rate_limit(request: Request, call_next):
-    ip = request.client.host if request.client else "?"
+    ip = _rl_key(request)
+    if ip is None:
+        return await call_next(request)
     now = time.time()
     hits = [t for t in _rl.get(ip, []) if now - t < 60]
     if len(hits) >= RL_LIMIT:
@@ -167,15 +195,12 @@ def meta_status():
 
 @v1.get("/meta/coverage")
 def meta_coverage():
-    """Cobertura temporal del GTFS por feed: primer y último día consultable."""
+    """Cobertura temporal VÁLIDA por feed: primer y último día consultable
+    (racha continua desde hoy con servicio completo) y lista de días
+    válidos. Ver _coverage_days."""
     _, _, today = _now()
-    with engine.connect() as c:
-        rows = c.execute(text("""
-            SELECT feed, min(day) AS first_day, max(day) AS last_day
-            FROM service_days GROUP BY feed""")).mappings().all()
-    feeds = {r["feed"]: {"first_day": str(r["first_day"]),
-                        "last_day": str(r["last_day"])} for r in rows}
-    return {"today": str(today), "feeds": feeds}
+    return {"today": str(today), "feeds": _coverage_days(),
+            "min_share": COVERAGE_MIN_SHARE}
 
 
 @v1.get("/stations/search")
@@ -268,7 +293,7 @@ def _board(feed: str, stop_id: str, kind: str, lo: int, hi: int,
     sql = text(f"""
         SELECT st.{col} AS sched, st.arr, st.dep, st.seq,
                st.{col} + (sd.day - :day) * 86400 AS eff_secs,
-               t.trip_id, t.train_number, t.headsign,
+               t.trip_id, t.train_number, t.headsign, t.route_id,
                r.short_name AS line, r.long_name AS route_name, r.color,
                tf.semidirect, tf.skipped,
                (SELECT s2.name FROM stop_times x JOIN stops s2
@@ -314,7 +339,10 @@ def _board(feed: str, stop_id: str, kind: str, lo: int, hi: int,
         out.append({
             "trip_id": r["trip_id"], "feed": feed,
             "line": (r["line"] or "").strip() or None,
+            "line_info": line_info(feed, r["route_id"], r["line"]),
             "train_number": r["train_number"],
+            "service_date": (day if r["eff_secs"] == r["sched"] else
+                             day - timedelta(days=1)).isoformat(),
             "destination": r["destination"], "origin": r["origin"],
             "scheduled": sched_epoch,
             "estimated": sched_epoch + (delay or 0),
@@ -341,6 +369,7 @@ def station(feed: str, stop_id: str):
     g = _geo_rows().get((feed, stop_id))
     return {"feed": feed, "stop_id": stop_id,
             "network": FEED_LABELS.get(feed, feed), **dict(s),
+            "lines": _station_lines(feed, stop_id),
             "geo": {
                 "poblacion": g["poblacion"],
                 "provincia": g["provincia"],
@@ -416,26 +445,63 @@ def station_board(feed: str, stop_id: str,
             "feed_ts": _feed_ts({feed})}
 
 
-@v1.get("/journeys")
-def journeys(frm: str = Query(alias="from"), to: str = Query(),
-             limit: int = Query(30, ge=1, le=100),
-             date: str | None = Query(None, description="YYYY-MM-DD (hoy por defecto)"),
-             time_s: str | None = Query(None, alias="time", description="HH:MM local"),
-             hours: int = Query(8, ge=1, le=24),
-             semidirect: bool = Query(False, description="solo semidirectos (omiten >=2 paradas)"),
-             response: Response = None):
-    """Trayectos directos origen→destino. `date`/`time` permiten planificar:
-    en fechas ≠ hoy devuelve horario programado sin retrasos.
+COVERAGE_MIN_SHARE = 0.3
+FLEET_MIN, FLEET_MAX = -60, 600
 
-    Compatibilidad: devuelve una lista (como siempre). La metadata va en
-    cabeceras X-Date, X-Scheduled-Only, X-Feed-Ts.
-    """
-    f_pairs = _parse_stops_param(frm)
-    t_pairs = _parse_stops_param(to)
-    combos = [(f, t) for f in f_pairs for t in t_pairs if f[0] == t[0]]
-    if not combos:
-        raise HTTPException(400, "origen y destino deben compartir red (cer|ld)")
-    day, lo, hi, is_today = _window(date, time_s, hours * 60)
+
+def _coverage_days() -> dict:
+    """Días con servicio válido por feed (cache 10 min).
+
+    Un día es válido si tiene al menos COVERAGE_MIN_SHARE de los viajes de
+    la mediana de los días con servicio: evita ofrecer fechas en las que el
+    GTFS solo conserva restos (unos pocos servicios sueltos) y presentarlas
+    como "sin trenes"."""
+    c0 = getattr(_coverage_days, "c", None)
+    if c0 and time.time() - c0[0] < 600:
+        return c0[1]
+    _, _, today = _now()
+    with engine.connect() as c:
+        rows = c.execute(text("""
+            SELECT sd.feed, sd.day, count(*) AS n
+            FROM service_days sd
+            JOIN trips t ON t.feed=sd.feed AND t.service_id=sd.service_id
+            WHERE sd.day >= :t
+            GROUP BY sd.feed, sd.day ORDER BY sd.feed, sd.day"""),
+            {"t": today}).all()
+    by: dict = {}
+    for feed, day, n in rows:
+        by.setdefault(feed, []).append((day, n))
+    out = {}
+    for feed, lst in by.items():
+        counts = sorted(n for _, n in lst)
+        med = counts[len(counts) // 2] if counts else 0
+        valid = [d for d, n in lst if n >= COVERAGE_MIN_SHARE * med]
+        vs = set(valid)
+        last = None
+        d = today
+        while d in vs:          # racha continua desde hoy
+            last = d
+            d += timedelta(days=1)
+        out[feed] = {"first_day": str(today) if today in vs else None,
+                     "last_day": str(last) if last else None,
+                     "valid_days": [str(x) for x in valid],
+                     "median_trips": med}
+    _coverage_days.c = (time.time(), out)
+    return out
+
+
+def _check_coverage(feeds: set[str], day) -> dict | None:
+    """None si `day` está cubierto para todos los feeds; si no, detalle."""
+    cov = _coverage_days()
+    for f in feeds:
+        fc = cov.get(f)
+        if not fc or str(day) not in fc["valid_days"]:
+            return {"feed": f, "first_day": (fc or {}).get("first_day"),
+                    "last_day": (fc or {}).get("last_day")}
+    return None
+
+
+def _journey_rows(combos, day, lo, hi, is_today, limit, semidirect):
     midnight = _local_midnight(day)
     rt_join = "" if not is_today else """
             LEFT JOIN rt_trip rt ON rt.feed=t.feed AND rt.trip_id=t.trip_id
@@ -452,7 +518,8 @@ def journeys(frm: str = Query(alias="from"), to: str = Query(),
         sql = text(f"""
             SELECT so.dep + (sd.day - :day) * 86400 AS dep_eff,
                    sd2.arr + (sd.day - :day) * 86400 AS arr_eff,
-                   t.trip_id, t.train_number, r.short_name AS line,
+                   t.trip_id, t.train_number, t.route_id, r.short_name AS line,
+                   sd.day AS service_day,
                    tf.semidirect, tf.skipped{rt_cols}
             FROM stop_times so
             JOIN stop_times sd2 ON sd2.feed=so.feed AND sd2.trip_id=so.trip_id
@@ -475,9 +542,12 @@ def journeys(frm: str = Query(alias="from"), to: str = Query(),
         for r in rows:
             delay = dep_d = arr_d = None
             cancelled = False
+            # RT solo hoy: en una ventana de <=24 h un trip_id diario aparece
+            # una única vez, así que el RT corresponde a esa instancia
             if is_today:
-                if r["fleet_delay"] is not None:
-                    delay = r["fleet_delay"] * 60
+                fl = r["fleet_delay"]
+                if fl is not None and FLEET_MIN <= fl <= FLEET_MAX:
+                    delay = fl * 60
                 else:
                     delay = r["arr_delay"] if r["arr_delay"] is not None else r["trip_delay"]
                 dep_d = r["dep_delay"] if r["dep_delay"] is not None else delay
@@ -486,7 +556,9 @@ def journeys(frm: str = Query(alias="from"), to: str = Query(),
             items.append({
                 "trip_id": r["trip_id"], "feed": ffeed,
                 "line": (r["line"] or "").strip() or None,
+                "line_info": line_info(ffeed, r["route_id"], r["line"]),
                 "train_number": r["train_number"],
+                "service_date": r["service_day"].isoformat(),
                 "dep_scheduled": midnight + int(r["dep_eff"]),
                 "arr_scheduled": midnight + int(r["arr_eff"]),
                 "dep_estimated": midnight + int(r["dep_eff"]) + (dep_d or 0),
@@ -498,13 +570,115 @@ def journeys(frm: str = Query(alias="from"), to: str = Query(),
                 "skipped_stops": r["skipped"] or 0,
             })
     items.sort(key=lambda i: i["dep_estimated"])
+    return items[:limit]
+
+
+def _ever_direct(combos) -> bool:
+    """¿Existe en el GTFS vigente ALGÚN viaje que pase por origen y luego
+    por destino (cualquier día)? Distingue 'sin servicios en la ventana'
+    de 'no hay servicio directo: requiere transbordo'."""
+    with engine.connect() as c:
+        for (feed, fstop), (_, tstop) in combos:
+            if c.execute(text("""
+                SELECT 1 FROM stop_times so
+                JOIN stop_times sd2 ON sd2.feed=so.feed AND sd2.trip_id=so.trip_id
+                     AND sd2.seq>so.seq AND sd2.stop_id=:t
+                WHERE so.feed=:f AND so.stop_id=:o LIMIT 1"""),
+                    {"f": feed, "o": fstop, "t": tstop}).first():
+                return True
+    return False
+
+
+@v1.get("/journeys")
+def journeys(frm: str = Query(alias="from"), to: str = Query(),
+             limit: int = Query(30, ge=1, le=100),
+             date: str | None = Query(None, description="YYYY-MM-DD (hoy por defecto)"),
+             time_s: str | None = Query(None, alias="time", description="HH:MM local"),
+             hours: int = Query(8, ge=1, le=24),
+             semidirect: bool = Query(False, description="solo semidirectos (omiten >=2 paradas)"),
+             response: Response = None):
+    """Trayectos directos origen→destino (lista, compatibilidad v0.2).
+    Para estados diferenciados usar /journeys/plan."""
+    f_pairs = _parse_stops_param(frm)
+    t_pairs = _parse_stops_param(to)
+    combos = [(f, t) for f in f_pairs for t in t_pairs if f[0] == t[0]]
+    if not combos:
+        raise HTTPException(400, "origen y destino deben compartir red (cer|ld)")
+    day, lo, hi, is_today = _window(date, time_s, hours * 60)
+    items = _journey_rows(combos, day, lo, hi, is_today, limit, semidirect)
     response.headers["X-Date"] = day.isoformat()
     response.headers["X-Scheduled-Only"] = "0" if is_today else "1"
     ts = _feed_ts({f for f, _ in combos})
     response.headers["X-Feed-Ts"] = ",".join(
         k.replace("rt_trip_updates_", "").replace("rt_fleet_", "") + f":{v}"
         for k, v in ts.items())
-    return items[:limit]
+    return items
+
+
+@v1.get("/journeys/plan")
+def journeys_plan(frm: str = Query(alias="from"), to: str = Query(),
+                  limit: int = Query(60, ge=1, le=200),
+                  date: str | None = None,
+                  time_s: str | None = Query(None, alias="time"),
+                  hours: int | None = Query(None, ge=1, le=24),
+                  semidirect: bool = False):
+    """Planificador de servicios DIRECTOS con estado explícito:
+
+    - ok                 hay trenes directos en la ventana
+    - no_direct_window   existen servicios directos en el GTFS, pero no en
+                         la fecha/franja consultada
+    - out_of_coverage    la fecha no está cubierta por el calendario vigente
+                         de la red (no se puede afirmar nada)
+    - needs_transfer     ningún tren del GTFS vigente une ambas estaciones
+                         sin transbordo; los transbordos NO se calculan
+    - different_networks origen y destino no comparten red (CER vs LD):
+                         haría falta transbordo entre redes (no soportado)
+    Sin `time` en una fecha distinta de hoy se consulta el día completo.
+    """
+    f_pairs = _parse_stops_param(frm)
+    t_pairs = _parse_stops_param(to)
+    combos = [(f, t) for f in f_pairs for t in t_pairs if f[0] == t[0]]
+    _, secs_now, today = _now()
+    day = _parse_date(date) or today
+    cov = {f: {k: v for k, v in fc.items() if k != "valid_days"}
+           for f, fc in _coverage_days().items()}
+    base = {"date": day.isoformat(), "today": today.isoformat(),
+            "scheduled_only": day != today, "transfers_supported": False,
+            "items": [], "coverage": cov, "time": time_s or None}
+    if not combos:
+        return {**base, "status": "different_networks",
+                "message": "Origen y destino no comparten red (Cercanías vs "
+                           "AV/LD): haría falta un transbordo entre redes, "
+                           "que este planificador no calcula."}
+    if day < today:
+        return {**base, "status": "out_of_coverage", "coverage_gap": None,
+                "message": "Fecha pasada: el planificador solo consulta hoy y "
+                           "fechas futuras."}
+    gap = _check_coverage({f for (f, _), _ in combos}, day)
+    if gap:
+        return {**base, "status": "out_of_coverage", "coverage_gap": gap,
+                "message": "La fecha elegida no está cubierta por el horario "
+                           "oficial vigente de esta red."}
+    t0 = _parse_time(time_s)
+    if t0 is None:
+        t0 = max(0, secs_now - 300) if day == today else 0
+    span = (hours or (24 if (day != today and not time_s) else 8)) * 3600
+    items = _journey_rows(combos, day, t0, t0 + span, day == today, limit,
+                          semidirect)
+    window = {"from_secs": t0, "to_secs": t0 + span}
+    if items:
+        return {**base, "status": "ok", "items": items, "window": window,
+                "feed_ts": _feed_ts({f for (f, _), _ in combos})}
+    if _ever_direct(combos):
+        return {**base, "status": "no_direct_window", "window": window,
+                "message": "Hay trenes directos entre estas estaciones, pero "
+                           "ninguno en la fecha y franja consultadas."
+                           + (" Prueba sin el filtro de semidirectos."
+                              if semidirect else "")}
+    return {**base, "status": "needs_transfer", "window": window,
+            "message": "Ningún tren del horario vigente une estas estaciones "
+                       "sin transbordo. Este planificador solo calcula "
+                       "servicios directos: no inventamos conexiones."}
 
 
 @v1.get("/trains/by-number/{number}")
@@ -513,10 +687,12 @@ def trains_by_number(number: str, date: str | None = None):
     num = re.sub(r"\D", "", number)
     if not num:
         raise HTTPException(400, "número inválido")
-    day = _parse_date(date) or _now()[2]
+    today = _now()[2]
+    day = _parse_date(date) or today
     with engine.connect() as c:
         rows = c.execute(text("""
-            SELECT DISTINCT t.feed, t.trip_id, t.train_number, r.short_name AS line,
+            SELECT DISTINCT t.feed, t.trip_id, t.train_number, t.route_id,
+                   r.short_name AS line,
                    rt.delay, fl.delay_min AS fleet_delay
             FROM trips t
             JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id AND sd.day=:day
@@ -527,15 +703,30 @@ def trains_by_number(number: str, date: str | None = None):
                 AND :today = TRUE
             WHERE t.train_number = :n
             LIMIT 10"""),
-            {"day": day, "n": num, "today": day == _now()[2]}).mappings().all()
-    return [dict(r) for r in rows]
+            {"day": day, "n": num, "today": day == today}).mappings().all()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["line_info"] = line_info(d["feed"], d["route_id"], d["line"])
+        d["service_date"] = day.isoformat()
+        out.append(d)
+    return out
 
 
 @v1.get("/trains/{feed}/{trip_id}")
-def train(feed: str, trip_id: str):
+def train(feed: str, trip_id: str, date: str | None = Query(
+        None, description="día de servicio YYYY-MM-DD (hoy por defecto)")):
+    """Ficha de una INSTANCIA de circulación (feed, trip_id, día).
+
+    En CER el trip_id se repite cada día: sin fecha se asume hoy. Con una
+    fecha distinta de hoy solo se devuelve horario programado (nunca el
+    RT de hoy) y se indica si el viaje circula realmente ese día."""
+    _, _, today = _now()
+    day = _parse_date(date) or today
+    is_today = day == today
     with engine.connect() as c:
         t = c.execute(text("""
-            SELECT t.trip_id, t.train_number, t.headsign, t.service_id,
+            SELECT t.trip_id, t.train_number, t.headsign, t.service_id, t.route_id,
                    r.short_name AS line, r.long_name AS route_name
             FROM trips t LEFT JOIN routes r
               ON r.feed=t.feed AND r.route_id=t.route_id
@@ -543,10 +734,16 @@ def train(feed: str, trip_id: str):
             {"f": feed, "t": trip_id}).mappings().first()
         if not t:
             raise HTTPException(404, "train not found")
-        stops = c.execute(text("""
-            SELECT st.seq, st.stop_id, s.name, st.arr, st.dep,
-                   su.delay AS stop_delay, su.time AS stop_time,
-                   rt.delay AS trip_delay, fl.delay_min AS fleet_delay,
+        runs = c.execute(text("""
+            SELECT 1 FROM service_days WHERE feed=:f AND service_id=:s AND day=:d"""),
+            {"f": feed, "s": t["service_id"], "d": day}).first() is not None
+        rt_on = is_today and runs
+        rtsel = ("su.delay AS stop_delay, su.time AS stop_time, "
+                 "rt.delay AS trip_delay, fl.delay_min AS fleet_delay") if rt_on else (
+                 "NULL AS stop_delay, NULL AS stop_time, "
+                 "NULL AS trip_delay, NULL AS fleet_delay")
+        stops = c.execute(text(f"""
+            SELECT st.seq, st.stop_id, s.name, st.arr, st.dep, {rtsel},
                    tf.semidirect, tf.skipped
             FROM stop_times st
             JOIN stops s ON s.feed=st.feed AND s.stop_id=st.stop_id
@@ -557,32 +754,34 @@ def train(feed: str, trip_id: str):
             LEFT JOIN trip_flags tf ON tf.feed=st.feed AND tf.trip_id=st.trip_id
             WHERE st.feed=:f AND st.trip_id=:t ORDER BY st.seq"""),
             {"f": feed, "t": trip_id}).mappings().all()
-        veh = c.execute(text("""
-            SELECT lat, lon, status, platform, label, ts FROM rt_vehicle
-            WHERE feed=:f AND trip_id=:t"""),
-            {"f": feed, "t": trip_id}).mappings().first()
-        rt = c.execute(text("""
-            SELECT delay, sched_rel, next_stop_id, next_stop_time FROM rt_trip
-            WHERE feed=:f AND trip_id=:t"""),
-            {"f": feed, "t": trip_id}).mappings().first()
-        fl = c.execute(text("""
-            SELECT delay_min, cur_stop_id, next_stop_id, next_eta, platform,
-                   next_platform, lat, lon, ts FROM rt_fleet
-            WHERE feed=:f AND trip_id=:t"""),
-            {"f": feed, "t": trip_id}).mappings().first()
-    _, _, today = _now()
-    midnight = _local_midnight(today)
+        veh = rt = fl = None
+        if rt_on:
+            veh = c.execute(text("""
+                SELECT lat, lon, status, platform, label, ts FROM rt_vehicle
+                WHERE feed=:f AND trip_id=:t"""),
+                {"f": feed, "t": trip_id}).mappings().first()
+            rt = c.execute(text("""
+                SELECT delay, sched_rel, next_stop_id, next_stop_time FROM rt_trip
+                WHERE feed=:f AND trip_id=:t"""),
+                {"f": feed, "t": trip_id}).mappings().first()
+            fl = c.execute(text("""
+                SELECT delay_min, cur_stop_id, next_stop_id, next_eta, platform,
+                       next_platform, lat, lon, ts FROM rt_fleet
+                WHERE feed=:f AND trip_id=:t"""),
+                {"f": feed, "t": trip_id}).mappings().first()
+            if fl and fl["delay_min"] is not None and not (
+                    FLEET_MIN <= fl["delay_min"] <= FLEET_MAX):
+                fl = {**fl, "delay_min": None}
+    midnight = _local_midnight(day)
     out_stops = []
     for r in stops:
-        # fuente del retraso por parada:
-        #  'stop'     = predicción RT específica de esta parada
-        #  'trip'     = predicción a nivel de viaje (propagada)
-        #  'observed' = retraso observado del visor, válido en la posición
-        #              actual del tren; en el resto es extrapolación
+        fld = r["fleet_delay"]
+        if fld is not None and not (FLEET_MIN <= fld <= FLEET_MAX):
+            fld = None
         if r["stop_delay"] is not None:
             delay, src = r["stop_delay"], "stop"
-        elif r["fleet_delay"] is not None:
-            delay, src = r["fleet_delay"] * 60, "observed"
+        elif fld is not None:
+            delay, src = fld * 60, "observed"
         elif r["trip_delay"] is not None:
             delay, src = r["trip_delay"], "trip"
         else:
@@ -603,6 +802,9 @@ def train(feed: str, trip_id: str):
         flags = {"semidirect": bool(stops[0]["semidirect"]),
                  "skipped_stops": stops[0]["skipped"] or 0}
     return {"trip": dict(t), "feed": feed,
+            "service_date": day.isoformat(), "runs_on_date": runs,
+            "scheduled_only": not rt_on,
+            "line_info": line_info(feed, t["route_id"], t["line"]),
             "rt": dict(rt) if rt else None,
             "fleet": dict(fl) if fl else None,
             "vehicle": dict(veh) if veh else None,
@@ -613,89 +815,60 @@ def train(feed: str, trip_id: str):
 @v1.get("/delays/ranking")
 def ranking(limit: int = Query(50, ge=1, le=200), min_delay: int = 60,
             feed: str | None = None,
-            ccaa: str | None = None, provincia: str | None = None):
-    """Ranking por retraso. `ccaa`/`provincia` (slug) filtran por la
-    PRÓXIMA PARADA informada por RT (next_stop_id): no es la posición
-    física del tren sino el destino RT anunciado — semántica local, no de
-    recorrido. El filtro se aplica en SQL antes del LIMIT para no devolver
-    resultados incompletos; ccaa+provincia se combinan con AND."""
+            ccaa: str | None = None, provincia: str | None = None,
+            nucleo: str | None = Query(None, description="slug de núcleo (madrid…)"),
+            linea: str | None = Query(None, description="slug de línea o familia (c4, c4a…)")):
+    """Ranking EN VIVO de trenes individuales por retraso informado.
+
+    `nucleo`/`linea` usan la identidad canónica de línea (route_id →
+    núcleo verificado), nunca la provincia ni el short_name.
+    `ccaa`/`provincia` (slug) filtran por la PRÓXIMA PARADA informada por
+    RT — semántica local, no de recorrido."""
     cond = ""
-    ccaa_code = provincia_slug = None
+    params = {}
     if ccaa or provincia:
         geo = _geo_rows()
+        ccaa_code = provincia_name = None
         for g in geo.values():
             if ccaa and _slug_ccaa(g["ccaa_code"]) == ccaa:
                 ccaa_code = g["ccaa_code"]
             if provincia and _slug_prov(g["provincia"] or "") == provincia:
-                provincia_slug = g["provincia"]
-            if (ccaa_code or not ccaa) and (provincia_slug or not provincia):
+                provincia_name = g["provincia"]
+            if (ccaa_code or not ccaa) and (provincia_name or not provincia):
                 break
-        if (ccaa and not ccaa_code) or (provincia and not provincia_slug):
+        if (ccaa and not ccaa_code) or (provincia and not provincia_name):
             return []  # territorio desconocido -> vacío honesto
         parts = []
         if ccaa_code:
             parts.append("g.ccaa_code = :ccaa_code")
-        if provincia_slug:
+            params["ccaa_code"] = ccaa_code
+        if provincia_name:
             parts.append("g.provincia = :prov")
+            params["prov"] = provincia_name
         cond = (" AND EXISTS (SELECT 1 FROM geo_station g"
                 " WHERE g.feed=rt.feed AND g.stop_id=rt.next_stop_id"
                 " AND g.active=1 AND " + " AND ".join(parts) + ")")
-    sql = text("""
-        SELECT rt.feed, rt.trip_id,
-               GREATEST(rt.delay, COALESCE(fl.delay_min,0)*60) AS delay,
-               CASE WHEN fl.delay_min IS NOT NULL
-                         AND fl.delay_min*60 >= rt.delay THEN 'observed'
-                    ELSE 'predicted' END AS delay_source,
-               rt.next_stop_id, rt.next_stop_time,
-               t.train_number, r.short_name AS line, s.name AS next_stop_name,
-               (SELECT s2.name FROM stop_times x JOIN stops s2
-                  ON s2.feed=x.feed AND s2.stop_id=x.stop_id
-                 WHERE x.feed=rt.feed AND x.trip_id=rt.trip_id
-                 ORDER BY x.seq DESC LIMIT 1) AS destination
-        FROM rt_trip rt
-        LEFT JOIN trips t ON t.feed=rt.feed AND t.trip_id=rt.trip_id
-        LEFT JOIN routes r ON r.feed=rt.feed AND r.route_id=t.route_id
-        LEFT JOIN stops s ON s.feed=rt.feed AND s.stop_id=rt.next_stop_id
-        LEFT JOIN rt_fleet fl ON fl.feed=rt.feed AND fl.trip_id=rt.trip_id
-        WHERE GREATEST(rt.delay, COALESCE(fl.delay_min,0)*60) >= :mind
-          AND rt.next_stop_time > :now
-          AND (CAST(:feed AS text) IS NULL OR rt.feed = :feed)
-        """ + cond + " ORDER BY delay DESC LIMIT :lim")
-    with engine.connect() as c:
-        rows = c.execute(sql, {"mind": min_delay, "now": int(time.time()),
-                               "feed": feed, "lim": limit,
-                               "ccaa_code": ccaa_code if ccaa else None,
-                               "prov": provincia_slug if provincia else None},
-                         ).mappings().all()
-    return [dict(r) for r in rows]
+    return live_trains(nucleo=nucleo, linea=linea, feed=feed,
+                       min_delay=min_delay, limit=limit, ccaa_cond=cond,
+                       params=params)
 
 
-@v1.get("/alerts")
+@v1.get("/alerts", deprecated=True)
 def alerts(feed: str = "cer", stop_id: str | None = None):
-    with engine.connect() as c:
-        rows = c.execute(text(
-            "SELECT alert_id, payload, updated_at FROM alerts WHERE feed=:f"),
-            {"f": feed}).all()
-        station_routes = set()
-        if stop_id:
-            station_routes = {r[0] for r in c.execute(text("""
-                SELECT DISTINCT t.route_id FROM trips t
-                JOIN stop_times st ON st.feed=t.feed AND st.trip_id=t.trip_id
-                WHERE st.feed=:f AND st.stop_id=:s"""),
-                {"f": feed, "s": stop_id})}
-    out = []
-    for aid, p, ts in rows:
-        informed = p.get("informedEntity", [])
-        ents = [(ie.get("stopId") or "") for ie in informed]
-        rts = {(ie.get("routeId") or "") for ie in informed}
-        if stop_id and stop_id not in ents and not (rts & station_routes):
-            continue
-        texts = p.get("descriptionText") or p.get("headerText") or {}
-        trans = texts.get("translation") or [{}]
-        out.append({"id": aid, "stop_ids": ents, "updated_at": ts,
-                    "text": trans[0].get("text"), "lang": trans[0].get("language"),
-                    "effect": p.get("effect"), "cause": p.get("cause")})
-    return out
+    """Compatibilidad: usa /incidencias. Con stop_id devuelve los avisos de
+    la estación y los de línea completa de las líneas que paran en ella,
+    marcando `relevance`."""
+    res = incidents_query(feed=feed,
+                          estacion=f"{feed}:{stop_id}" if stop_id else None,
+                          periodo="actuales")
+    return [{"id": a["id"], "stop_ids": [e["stop_id"] for e in a["entities"]],
+             "updated_at": a["provenance"]["feed_ts"],
+             "text": a["description"] or a["header"], "lang": a["language"],
+             "effect": a["effect"], "cause": a["cause"],
+             "relevance": a.get("relevance"), "scope": a["scope"],
+             "lines": [li["label"] for li in a["lines"]],
+             "categories": [c["category"] for c in a["categories"]]}
+            for a in res["items"]]
 
 
 @v1.get("/stations/{feed}/{stop_id}/punctuality")
@@ -823,6 +996,35 @@ def _geo_rows():
     return _geo_rows.c["rows"]
 
 
+_groups_cache: dict = {"key": None, "groups": []}
+
+
+def _station_groups() -> list:
+    """Agrupación física (mismo nombre normalizado y <1,5 km). Indexada
+    por nombre (antes O(n²)) y cacheada mientras no cambie _stations()."""
+    rows = _stations()
+    if _groups_cache["key"] == _stations_cache["ts"]:
+        return _groups_cache["groups"]
+    by_name: dict = {}
+    groups: list = []
+    for s in rows:
+        nn = _norm(s["name"])
+        placed = False
+        for g in by_name.get(nn, []):
+            d = _haversine_m(g["lat"], g["lon"], s["lat"], s["lon"])
+            if d is not None and d < 1500:
+                g["stops"].append((s["feed"], s["stop_id"]))
+                placed = True
+                break
+        if not placed:
+            g = {"name": s["name"], "lat": s["lat"], "lon": s["lon"],
+                 "stops": [(s["feed"], s["stop_id"])]}
+            by_name.setdefault(nn, []).append(g)
+            groups.append(g)
+    _groups_cache.update(key=_stations_cache["ts"], groups=groups)
+    return groups
+
+
 def _geo_items(ccaa_slug=None, prov_slug=None, q=None):
     """Estaciones físicas con territorio.
 
@@ -833,19 +1035,7 @@ def _geo_items(ccaa_slug=None, prov_slug=None, q=None):
     conflictos entre miembros se ignoran conservadoramente.
     """
     geo = _geo_rows()
-    groups: list = []
-    for s in _stations():
-        placed = False
-        for g in groups:
-            if _norm(g["name"]) == _norm(s["name"]):
-                d = _haversine_m(g["lat"], g["lon"], s["lat"], s["lon"])
-                if d is not None and d < 1500:
-                    g["stops"].append((s["feed"], s["stop_id"]))
-                    placed = True
-                    break
-        if not placed:
-            groups.append({"name": s["name"], "lat": s["lat"], "lon": s["lon"],
-                           "stops": [(s["feed"], s["stop_id"])]})
+    groups = _station_groups()
     items = []
     for g in groups:
         ent = {"name": g["name"], "lat": g["lat"], "lon": g["lon"],
@@ -1004,83 +1194,39 @@ def geo_audit(source: str | None = None,
             "items": out[(page - 1) * size: page * size]}
 
 
-# ---------- web push (v0.3): suscripciones anónimas, borrado inmediato ----------
-
-class PushSubscriptionIn(BaseModel):
-    endpoint: str = Field(min_length=20, max_length=2000)
-    keys: dict = Field(default_factory=dict)
-    config: dict = Field(default_factory=dict)
-
-
-@v1.get("/push/public-key")
-def push_public_key():
-    pk = os.environ.get("VAPID_PUBLIC_KEY", "")
-    if not pk:
-        raise HTTPException(503, "push no configurado")
-    return {"key": pk}
-
-
-@v1.post("/push/subscribe")
-def push_subscribe(body: PushSubscriptionIn):
-    keys = body.keys or {}
-    if not keys.get("p256dh") or not keys.get("auth"):
-        raise HTTPException(400, "faltan claves p256dh/auth")
-    cfg = body.config or {}
-    days = cfg.get("days") or []
-    clean = {
-        "type": cfg.get("type") if cfg.get("type") in ("journey", "station") else None,
-        "from_key": str(cfg.get("from_key") or "")[:200],
-        "to_key": str(cfg.get("to_key") or "")[:200],
-        "station_key": str(cfg.get("station_key") or "")[:200],
-        "days": [int(d) for d in days if isinstance(d, int) and 0 <= d <= 6][:7],
-        "from_time": str(cfg.get("from_time") or "")[:5],
-        "to_time": str(cfg.get("to_time") or "")[:5],
-        "threshold_min": min(max(int(cfg.get("threshold_min", 5) or 5), 1), 120),
-        "min_interval_min": min(max(int(cfg.get("min_interval_min", 30) or 30), 10), 1440),
-    }
-    ok = (clean["type"] == "journey" and clean["from_key"] and clean["to_key"]) \
-        or (clean["type"] == "station" and clean["station_key"])
-    if not ok:
-        raise HTTPException(400, "config incompleta")
-    with engine.begin() as c:
-        c.execute(text("""
-            INSERT INTO push_subs (endpoint, p256dh, auth, config)
-            VALUES (:e, :p, :a, CAST(:cfg AS jsonb))
-            ON CONFLICT (endpoint) DO UPDATE SET p256dh=:p, auth=:a, config=:cfg
-        """), {"e": body.endpoint, "p": keys["p256dh"], "a": keys["auth"],
-               "cfg": json.dumps(clean)})
-    return {"ok": True}
-
-
-@v1.post("/push/unsubscribe")
-def push_unsubscribe(body: dict):
-    endpoint = str(body.get("endpoint") or "")
-    if len(endpoint) < 20:
-        raise HTTPException(400, "endpoint inválido")
-    with engine.begin() as c:
-        c.execute(text("DELETE FROM push_subs WHERE endpoint=:e"), {"e": endpoint})
-    return {"ok": True}
-
-
 app.include_router(v1)
+app.include_router(lines_router)
+app.include_router(incidents_router)
+app.include_router(push_router)
 
 
 @app.on_event("startup")
-def _ensure_push_table():
-    """push_subs la crea normalmente el collector (create_all); si la API
-    arranca antes, la creamos aquí para que /push/subscribe nunca falle."""
+def _ensure_push_tables():
+    """Las tablas las crea el collector (create_all); si la API arranca
+    antes, se crean aquí con el mismo esquema para que /push nunca falle."""
     try:
         with engine.begin() as c:
             c.execute(text("""
-                CREATE TABLE IF NOT EXISTS push_subs (
-                    id BIGSERIAL PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS push_devices (
+                    id VARCHAR(36) PRIMARY KEY,
                     endpoint TEXT UNIQUE NOT NULL,
                     p256dh TEXT NOT NULL,
                     auth TEXT NOT NULL,
+                    token_hash VARCHAR(64),
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    last_seen_at TIMESTAMPTZ)"""))
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS push_rules (
+                    id VARCHAR(36) PRIMARY KEY,
+                    device_id VARCHAR(36) NOT NULL,
                     config JSONB NOT NULL,
+                    enabled INTEGER DEFAULT 1,
                     last_notify_key TEXT,
                     last_notify_at TIMESTAMPTZ,
-                    created_at TIMESTAMPTZ DEFAULT now()
-                )"""))
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    updated_at TIMESTAMPTZ DEFAULT now())"""))
+            c.execute(text("CREATE INDEX IF NOT EXISTS ix_push_rules_device_id"
+                           " ON push_rules (device_id)"))
     except Exception:
         pass
+    reset_caches()

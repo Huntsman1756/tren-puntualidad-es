@@ -2,31 +2,48 @@
 import Base from '../layouts/Base.astro';
 import Planner from '../components/Planner.svelte';
 import FavJourneys from '../components/FavJourneys.svelte';
+import LineBadge from '../components/LineBadge.svelte';
 import { api } from '../lib/api';
 import { fmtDelay, ageText } from '../lib/format';
 
-let ranking: any[] = [];
-let status: any = null;
-try {
-  [ranking, status] = await Promise.all([api.ranking(8), api.status()]);
-} catch {}
+const date = Astro.url.searchParams.get('date') || '';
+const time = Astro.url.searchParams.get('time') || '';
+const [ranking, status, nucleos] = await Promise.all([
+  api.ranking(6).catch(() => []),
+  api.status().catch(() => null),
+  api.nucleos().catch(() => []),
+]);
 const rtC = status?.feeds?.rt_trip_updates_cer?.ts;
 const rtL = status?.feeds?.rt_trip_updates_ld?.ts;
 ---
 <Base>
   <section class="hero">
     <h1>Tu tren, sin complicaciones</h1>
-    <p class="muted">Salidas, llegadas y retrasos de cualquier estación Renfe —
-      Cercanías, Rodalies, AVE, Larga y Media Distancia.</p>
+    <p class="muted">Salidas, llegadas, avisos y retrasos de Renfe — Cercanías, Rodalies,
+      AVE, Larga y Media Distancia — para hoy o cualquier día con horario publicado.</p>
   </section>
 
   <div class="card planner-card">
-    <Planner client:load />
+    <Planner client:load initialDate={date} initialTime={time} />
   </div>
 
   <div class="card">
     <FavJourneys client:load />
   </div>
+
+  {nucleos.length > 0 && (
+    <section class="card">
+      <h2>Tu núcleo <a href="/nucleos">todos los núcleos</a></h2>
+      <div class="nucs">
+        {nucleos.map((n: any) => (
+          <a class="nuc" href={n.url}>{n.name}
+            {n.alerts > 0 && <span class="al" title="Avisos oficiales publicados">⚠ {n.alerts}</span>}</a>
+        ))}
+      </div>
+      <p class="muted small"><a href="/incidencias">Incidencias oficiales</a> ·
+        <a href="/lineas">Todas las líneas</a></p>
+    </section>
+  )}
 
   {status?.feeds && (rtC || rtL) && (
     <p class="muted fresh">
@@ -37,13 +54,13 @@ const rtL = status?.feeds?.rt_trip_updates_ld?.ts;
 
   {ranking.length > 0 && (
     <div class="card">
-      <h2>Mayores retrasos ahora · <a href="/retrasos">ver todos</a></h2>
+      <h2>Mayores retrasos ahora <a href="/retrasos">ver por núcleo y línea</a></h2>
       <div class="rank">
         {ranking.map((r: any) => {
           const d = fmtDelay(r.delay);
           return (
             <a class="rk" href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>
-              <span class="line-tag">{r.line || '—'}</span>
+              <LineBadge line={r.line_info} fallback={r.line || '—'} link={false} />
               <span class="rknum">{r.train_number || r.trip_id}</span>
               <span class="rkdest">{r.destination || '—'}</span>
               <span class={`badge ${d.cls}`}>
@@ -52,6 +69,7 @@ const rtL = status?.feeds?.rt_trip_updates_ld?.ts;
           );
         })}
       </div>
+      <p class="muted small">Retraso informado ahora mismo; no es puntualidad histórica.</p>
     </div>
   )}
 </Base>
@@ -60,12 +78,19 @@ const rtL = status?.feeds?.rt_trip_updates_ld?.ts;
   .hero h1 { margin: 0 0 .3rem; font-size: 1.7rem; letter-spacing: -.02em; }
   .hero p { margin: 0; }
   .planner-card { border-color: var(--accent); border-width: 1px; }
-  h2 { margin: 0 0 .6rem; font-size: 1rem; }
+  h2 { margin: 0 0 .6rem; font-size: 1rem; display: flex; gap: .6rem; align-items: baseline; }
   h2 a { font-size: .8rem; font-weight: 400; }
+  .nucs { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .nuc { border: 1px solid var(--border); border-radius: 999px; padding: .3rem .75rem;
+         font-size: .85rem; color: var(--text); min-height: 34px; display: inline-flex;
+         gap: .35rem; align-items: center; }
+  .nuc:hover { border-color: var(--accent); }
+  .al { color: var(--warn); font-size: .75rem; }
+  .small { font-size: .78rem; margin: .5rem 0 0; }
   .fresh { font-size: .78rem; text-align: center; margin: .2rem 0 0; }
   .rank { display: flex; flex-direction: column; }
-  .rk { display: flex; align-items: baseline; gap: .7rem; padding: .45rem .2rem;
-        border-top: 1px solid var(--border); color: var(--text); }
+  .rk { display: flex; align-items: center; gap: .7rem; padding: .45rem .2rem;
+        border-top: 1px solid var(--border); color: var(--text); min-height: 44px; }
   .rk:first-child { border-top: 0; }
   .rknum { min-width: 4.5rem; font-variant-numeric: tabular-nums; }
   .rkdest { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

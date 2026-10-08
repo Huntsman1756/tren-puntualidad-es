@@ -1,0 +1,25 @@
+---
+import Base from '../layouts/Base.astro';
+import Planner from '../components/Planner.svelte';
+
+const date = Astro.url.searchParams.get('date') || '';
+const time = Astro.url.searchParams.get('time') || '';
+const tab = ['journey', 'station', 'train'].includes(Astro.url.searchParams.get('tipo') || '')
+  ? Astro.url.searchParams.get('tipo')! : 'journey';
+---
+<Base title="Horarios de tren — Trenes a tiempo"
+      description="Consulta horarios de trenes Renfe por trayecto, estación o número de tren para hoy, mañana, el fin de semana o cualquier fecha con horario publicado.">
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › Horarios</nav>
+  <h1>Horarios</h1>
+  <div class="card">
+    <Planner client:load initialDate={date} initialTime={time} initialTab={tab} />
+  </div>
+  <div class="card muted small">
+    <p>El planificador calcula <strong>solo trenes directos</strong>: si para tu trayecto hace
+      falta un transbordo te lo indicamos, pero no inventamos conexiones.</p>
+    <p>Las fechas futuras muestran el horario programado oficial; los retrasos en tiempo real
+      solo existen para hoy. Solo se pueden elegir fechas cubiertas por el horario publicado
+      de cada red.</p>
+  </div>
+</Base>
+<style>.small { font-size: .85rem; } .small p { margin: .3rem 0; }</style>

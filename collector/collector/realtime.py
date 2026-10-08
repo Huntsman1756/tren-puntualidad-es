@@ -240,11 +240,28 @@ def poll_vehicle_positions(feed: str):
     return len(rows)
 
 
-def poll_alerts(feed: str):
+def poll_alerts(feed: str, data: dict | None = None, now: int | None = None):
+    """Avisos oficiales GTFS-RT.
+
+    Salud de la fuente separada del contenido: `rt_alerts_{feed}` es el
+    timestamp del feed (solo cambia cuando Renfe regenera los avisos) y
+    `alerts_fetch_ok_{feed}` la última descarga correcta nuestra. Así una
+    fuente sana sin avisos (fetch reciente, 0 entidades) no se confunde con
+    una fuente caída (fetch fallando). `alerts_seen` guarda el histórico
+    (primera/última vez vistos) para poder consultar periodos pasados.
+    """
     url = RT_ALERTS.get(feed)
     if not url:
         return 0
-    data = _fetch(url)
+    now = int(now if now is not None else time.time())
+    if data is None:
+        try:
+            data = _fetch(url)
+        except Exception as e:
+            with engine.begin() as conn:
+                set_meta(conn, f"alerts_fetch_err_{feed}", now)
+                set_meta(conn, f"alerts_fetch_errmsg_{feed}", str(e)[:200])
+            raise
     feed_ts, rows = parse_alerts(data, feed)
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM alerts WHERE feed=:f"), {"f": feed})
@@ -253,7 +270,15 @@ def poll_alerts(feed: str):
                 INSERT INTO alerts(feed,alert_id,payload,updated_at)
                 VALUES(:f,:a,CAST(:p AS jsonb),:ts)
             """), rows)
+            conn.execute(text("""
+                INSERT INTO alerts_seen(feed,alert_id,payload,first_seen,last_seen)
+                VALUES(:f,:a,CAST(:p AS jsonb),:now,:now)
+                ON CONFLICT(feed,alert_id) DO UPDATE SET
+                  payload=EXCLUDED.payload, last_seen=EXCLUDED.last_seen
+            """), [{**r, "now": now} for r in rows])
         set_meta(conn, f"rt_alerts_{feed}", feed_ts)
+        set_meta(conn, f"alerts_fetch_ok_{feed}", now)
+        set_meta(conn, f"alerts_count_{feed}", len(rows))
     return len(rows)
 
 
@@ -312,6 +337,7 @@ def prune_history(days=90):
     cut = int(time.time()) - days * 86400
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM observations WHERE observed_at < :c"), {"c": cut})
+        conn.execute(text("DELETE FROM alerts_seen WHERE last_seen < :c"), {"c": cut})
         # Viajes en rt_trip que llevan >12h sin actualizarse: limpieza
         conn.execute(text("DELETE FROM rt_trip WHERE updated_at < :c"),
                      {"c": int(time.time()) - 43200})

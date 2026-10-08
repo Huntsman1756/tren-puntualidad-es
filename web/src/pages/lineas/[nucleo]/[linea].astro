@@ -1,0 +1,150 @@
+---
+import Base from '../../../layouts/Base.astro';
+import IncidentCard from '../../../components/IncidentCard.svelte';
+import SourceStatus from '../../../components/SourceStatus.svelte';
+import LineBadge from '../../../components/LineBadge.svelte';
+import { api } from '../../../lib/api';
+import { fmtDelay, fmtTime } from '../../../lib/format';
+
+const { nucleo, linea } = Astro.params as { nucleo: string; linea: string };
+const date = Astro.url.searchParams.get('date') || '';
+const time = Astro.url.searchParams.get('time') || '';
+let L: any = null;
+try {
+  L = await api.linea(nucleo, linea);
+} catch (e: any) {
+  if (e?.status === 404) return new Response(null, { status: 404, statusText: 'Not found' });
+  throw e;
+}
+const inc = await api.incidencias({ nucleo, linea }).catch(() => null);
+const lineAlerts = (inc?.items || []).filter((a: any) => a.relevance === 'line');
+const stAlerts = (inc?.items || []).filter((a: any) => a.relevance !== 'line');
+const dq = new URLSearchParams();
+if (date) dq.set('date', date);
+if (time) dq.set('time', time);
+const ds = dq.toString() ? `?${dq}` : '';
+const color = L.line.color && L.line.color !== 'FFFFFF' ? `#${L.line.color}` : 'var(--accent)';
+const fam = L.family;
+---
+<Base title={`${L.line.label}: estaciones, horarios e incidencias — Trenes a tiempo`}
+      description={`Línea ${L.line.code} de ${L.nucleo.brand} ${L.nucleo.name}: estaciones, trenes en circulación, retrasos y avisos oficiales.`}>
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › <a href="/nucleos">Núcleos</a> ›
+    <a href={`/nucleos/${L.nucleo.slug}`}>{L.nucleo.name}</a> › {L.line.code}</nav>
+  <div class="hero" style={`--lc:${color}`}>
+    <span class="big">{L.line.code}</span>
+    <div>
+      <h1>Línea {L.line.code} · {L.nucleo.brand} {L.nucleo.name}</h1>
+      <p class="muted">{L.nucleo.operator}{!L.line.is_family && fam.code !== L.line.code &&
+        <> · variante de la <a href={fam.url}>{fam.code}</a></>}</p>
+    </div>
+  </div>
+  {fam.variants.length > 1 && (
+    <p class="variants">
+      <a href={fam.url} aria-current={L.line.is_family ? 'page' : undefined}>{fam.code} (todas)</a>
+      {fam.variants.map((v: any) => v.slug !== fam.slug && (
+        <a href={v.url} aria-current={v.slug === linea ? 'page' : undefined}>{v.code}{v.bus_only ? ' (bus)' : ''}</a>))}
+    </p>
+  )}
+
+  <section class="card">
+    <h2>Incidencias</h2>
+    {inc && <SourceStatus source={inc.source} count={inc.total} />}
+    {lineAlerts.map((a: any) => <IncidentCard a={a} context="line" />)}
+    {stAlerts.length > 0 && (
+      <details class="st-al">
+        <summary>{stAlerts.length} aviso{stAlerts.length === 1 ? '' : 's'} en estaciones concretas de la línea</summary>
+        {stAlerts.map((a: any) => <IncidentCard a={a} context="line" />)}
+      </details>
+    )}
+  </section>
+
+  <section class="card">
+    <h2>Trenes en circulación ahora</h2>
+    {L.live.length === 0
+      ? <p class="muted">Ningún tren de esta línea con dato en tiempo real ahora mismo.
+          No implica que no circulen trenes: Renfe no informa de todos.</p>
+      : (
+        <table class="board">
+          <thead><tr><th>Tren</th><th>Destino</th><th>Próx. parada</th><th>Estado</th></tr></thead>
+          <tbody>
+            {L.live.map((t: any) => {
+              const d = fmtDelay(t.delay);
+              return (
+                <tr>
+                  <td><a href={`/tren/${t.feed}/${encodeURIComponent(t.trip_id)}`}>{t.train_number || t.trip_id}</a>
+                    {t.line_info && t.line_info.code !== L.line.code && <> <LineBadge line={t.line_info} showNucleo={false} /></>}</td>
+                  <td>{t.destination || '—'}</td>
+                  <td>{t.next_stop_name || '—'} <span class="muted">{fmtTime(t.next_stop_time)}</span></td>
+                  <td>{t.cancelled ? <span class="badge cancel">suprimido</span>
+                    : <span class={`badge ${d.cls}`}>{d.text}{t.delay_source === 'observed' ? ' · obs.' : ' · est.'}</span>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+  </section>
+
+  <section class="card">
+    <h2>Estaciones</h2>
+    {L.patterns.filter((p: any) => p.stops.length).map((p: any) => (
+      <div class="pat">
+        {L.patterns.length > 1 && <h3>{p.code}</h3>}
+        <ol class="stops" style={`--lc:${color}`}>
+          {p.stops.map((s: any) => (
+            <li><a href={`/estacion/cer:${s.stop_id}${ds}`}>{s.name}</a></li>
+          ))}
+        </ol>
+      </div>
+    ))}
+    {L.stations.length > Math.max(0, ...L.patterns.map((p: any) => p.stops.length)) && (
+      <details>
+        <summary>Todas las estaciones servidas ({L.stations.length})</summary>
+        <ul class="all">
+          {L.stations.map((s: any) => <li><a href={`/estacion/${s.key}${ds}`}>{s.name}</a></li>)}
+        </ul>
+      </details>
+    )}
+    <p class="muted small">Recorrido del tren con más paradas de cada variante (un sentido);
+      algunos servicios hacen recorridos parciales.</p>
+  </section>
+
+  <details class="card audit">
+    <summary>Identificadores oficiales (GTFS)</summary>
+    <p class="small muted">Correspondencia verificable: el prefijo del route_id indica el
+      núcleo y se contrasta con el núcleo oficial de las estaciones de la ruta.</p>
+    <table class="board">
+      <thead><tr><th>route_id</th><th>Código</th><th>Recorrido</th><th>Viajes</th><th>Estado</th></tr></thead>
+      <tbody>
+        {L.routes.map((r: any) => (
+          <tr><td><code>{r.route_id}</code></td><td>{r.line_code}{r.mode === 'bus' ? ' (bus)' : ''}</td>
+            <td class="small">{(r.long_name || '').replace(/\s+/g, ' ')}</td><td>{r.trips}</td>
+            <td class="small">{r.status === 'verified' ? 'verificado' : r.status === 'prefix_only' ? 'solo prefijo' : r.status}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  </details>
+</Base>
+<style>
+  .hero { display: flex; gap: .9rem; align-items: center; margin: .4rem 0 .6rem; }
+  .hero h1 { margin: 0; font-size: 1.35rem; }
+  .hero p { margin: .1rem 0 0; }
+  .big { background: var(--lc); color: #fff; font-weight: 800; font-size: 1.5rem; border-radius: 10px;
+         padding: .35rem .7rem; text-shadow: 0 0 3px rgba(0,0,0,.5); }
+  .variants { display: flex; gap: .4rem; flex-wrap: wrap; }
+  .variants a { border: 1px solid var(--border); border-radius: 999px; padding: .25rem .7rem;
+                font-size: .85rem; }
+  .variants a[aria-current] { border-color: var(--accent); font-weight: 700; }
+  h2 { font-size: 1rem; margin: 0 0 .5rem; }
+  h3 { font-size: .9rem; margin: .6rem 0 .2rem; }
+  .stops { list-style: none; padding: 0 0 0 .9rem; margin: .3rem 0; border-left: 4px solid var(--lc); }
+  .stops li { position: relative; padding: .28rem 0 .28rem .6rem; }
+  .stops li::before { content: ''; position: absolute; left: -1.33rem; top: .62rem; width: .6rem;
+                      height: .6rem; border-radius: 50%; background: var(--card); border: 2px solid var(--lc); }
+  .all { columns: 2; font-size: .88rem; }
+  .small { font-size: .78rem; }
+  .st-al summary { cursor: pointer; font-size: .85rem; margin: .4rem 0; }
+  .audit summary { cursor: pointer; font-weight: 600; }
+  code { font-size: .8rem; }
+  @media (max-width: 560px) { .all { columns: 1; } }
+</style>

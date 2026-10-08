@@ -1,0 +1,22 @@
+---
+import Base from '../layouts/Base.astro';
+import FavJourneys from '../components/FavJourneys.svelte';
+import FavStationsList from '../components/FavStationsList.svelte';
+import PushRules from '../components/PushRules.svelte';
+---
+<Base title="Favoritos y avisos — Trenes a tiempo"
+      description="Tus trayectos y estaciones guardados y tus avisos de retraso. Todo se guarda solo en este navegador.">
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › Favoritos</nav>
+  <h1>Favoritos</h1>
+  <p class="muted">Sin cuenta: tus favoritos viven en este navegador (exportables en JSON).</p>
+  <div class="card"><FavJourneys client:load /></div>
+  <section class="card">
+    <h2>Estaciones</h2>
+    <FavStationsList client:load />
+  </section>
+  <section class="card" id="avisos">
+    <h2>Avisos de retraso</h2>
+    <PushRules client:load />
+  </section>
+</Base>
+<style>h2 { font-size: 1rem; margin: 0 0 .5rem; }</style>

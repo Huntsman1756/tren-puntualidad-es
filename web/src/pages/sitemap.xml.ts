@@ -7,7 +7,8 @@ const SITE = (typeof process !== 'undefined' && process.env?.PUBLIC_SITE_URL)
 
 export const GET: APIRoute = async () => {
   const base = SITE.replace(/\/$/, '');
-  let urls: string[] = ['/', '/retrasos', '/estado', '/fuentes', '/estaciones'];
+  let urls: string[] = ['/', '/horarios', '/retrasos', '/incidencias', '/nucleos',
+    '/lineas', '/estado', '/fuentes', '/estaciones'];
   try {
     const [r, g] = await Promise.all([
       fetch(`${API}/api/v1/stations/sitemap`),
@@ -16,6 +17,17 @@ export const GET: APIRoute = async () => {
     if (r.ok) {
       const stops: { key: string }[] = await r.json();
       urls = urls.concat(stops.map((s) => `/estacion/${s.key}`));
+    }
+    const n = await fetch(`${API}/api/v1/nucleos`).catch(() => null);
+    if (n?.ok) {
+      const nucs: any[] = await n.json();
+      for (const x of nucs) {
+        urls.push(x.url);
+        for (const l of x.lines) {
+          urls.push(l.url);
+          for (const v of l.variants) if (v.url !== l.url) urls.push(v.url);
+        }
+      }
     }
     if (g.ok) {
       const ccaas: { slug: string }[] = await g.json();

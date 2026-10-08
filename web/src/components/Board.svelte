@@ -1,7 +1,9 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { PUBLIC_API } from '../lib/api';
-  import { fmtTime, fmtDelay, fmtDate, ageText } from '../lib/format';
+  import { fmtTime, fmtDelay, ageText } from '../lib/format';
+  import { madridToday } from '../lib/dates';
+  import LineBadge from './LineBadge.svelte';
 
   export let stops;                    // "cer:18000" o "cer:18000,ld:18000"
   export let initialItems = [];
@@ -24,9 +26,11 @@
 
   const isToday = !date || meta.scheduled_only === false;
 
-  $: lines = [...new Set(items.map((i) => i.line).filter(Boolean))].sort();
+  const today = madridToday();
+  const lineKey = (i) => i.line_info?.label || i.line;
+  $: lines = [...new Set(items.map(lineKey).filter(Boolean))].sort();
   $: filtered = items
-      .filter((i) => !lineFilter || i.line === lineFilter)
+      .filter((i) => !lineFilter || lineKey(i) === lineFilter)
       .filter((i) => !destFilter ||
         ((i.destination || '') + ' ' + (i.origin || ''))
           .toLowerCase().includes(destFilter.toLowerCase()))
@@ -53,7 +57,9 @@
       items = d.items; kind = k; meta = d; error = null; now = Date.now();
     } catch (e) {
       // nunca presentar un fallo de refresco como "no hay trenes"
-      error = 'No se pudo actualizar; se muestran los últimos datos válidos.';
+      error = items.length
+        ? 'Error de consulta al actualizar: se muestran los últimos datos válidos.'
+        : 'Error de consulta: no se han podido cargar los trenes.';
     } finally { loading = false; }
   }
 
@@ -66,6 +72,11 @@
       return { text: `${d.text} · obs.`, cls: d.cls === 'ok' ? 'ok' : d.cls };
     if (it.realtime) return { text: `${d.text} · est.`, cls: d.cls };
     return { text: 'programado', cls: 'nodata' };
+  }
+
+  function trainHref(it) {
+    const base = `/tren/${it.feed}/${encodeURIComponent(it.trip_id)}`;
+    return it.service_date && it.service_date !== today ? `${base}?date=${it.service_date}` : base;
   }
 
   onMount(() => {
@@ -115,7 +126,7 @@
   </div>
 {/if}
 
-{#if filtered.length === 0}
+{#if filtered.length === 0 && !(error && !items.length)}
   <p class="muted">
     {items.length === 0
       ? `No hay trenes ${kind === 'departures' ? 'con salida' : 'con llegada'} prevista en la ventana consultada.`
@@ -145,10 +156,10 @@
               <br /><span class="muted est">→ {fmtTime(it.estimated)}</span>
             {/if}
           </td>
-          <td>{#if it.line}<span class="line-tag">{it.line}</span>{/if}
+          <td><LineBadge line={it.line_info} fallback={it.line} showNucleo={false} />
             {#if it.semidirect}<span class="badge semi" title={`Omite ${it.skipped_stops} paradas`}>semi</span>{/if}</td>
           <td>{kind === 'departures' ? (it.destination || '—') : (it.origin || '—')}</td>
-          <td><a href="/tren/{it.feed}/{encodeURIComponent(it.trip_id)}">{it.train_number || it.trip_id}</a></td>
+          <td><a href={trainHref(it)}>{it.train_number || it.trip_id}</a></td>
           <td>{it.platform || '—'}</td>
           <td><span class="badge {s.cls}">{s.text}</span></td>
         </tr>
@@ -160,7 +171,7 @@
     {#each filtered as it (it.feed + it.trip_id + it.seq)}
       {@const d = fmtDelay(it.delay_sec)}
       {@const s = srcLabel(it, d)}
-      <a class="tcard" href="/tren/{it.feed}/{encodeURIComponent(it.trip_id)}">
+      <a class="tcard" href={trainHref(it)}>
         <div class="tcard-top">
           <span class="ttime">
             {fmtTime(it.scheduled)}
@@ -168,7 +179,7 @@
               <span class="est">→ {fmtTime(it.estimated)}</span>
             {/if}
           </span>
-          {#if it.line}<span class="line-tag">{it.line}</span>{/if}
+          <LineBadge line={it.line_info} fallback={it.line} showNucleo={false} link={false} />
           <span class="badge {s.cls}">{s.text}</span>
         </div>
         <div class="tcard-sub">

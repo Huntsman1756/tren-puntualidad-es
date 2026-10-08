@@ -1,32 +1,43 @@
 ---
 import Base from '../../layouts/Base.astro';
+import LineBadge from '../../components/LineBadge.svelte';
 import { api } from '../../lib/api';
 import { fmtDelay } from '../../lib/format';
+import { madridToday, relDay } from '../../lib/dates';
 
 const n = Astro.params.n || '';
+const date = Astro.url.searchParams.get('date') || '';
+const today = madridToday();
+const day = date || today;
 let items: any[] = [];
-try { items = await api.trainByNumber(n); } catch {}
-if (items.length === 1) {
-  return Astro.redirect(`/tren/${items[0].feed}/${encodeURIComponent(items[0].trip_id)}`);
-}
+let error = false;
+try { items = await api.trainByNumber(n, date || undefined); } catch { error = true; }
+const href = (t: any) => `/tren/${t.feed}/${encodeURIComponent(t.trip_id)}`
+  + (day !== today ? `?date=${day}` : '');
+if (items.length === 1) return Astro.redirect(href(items[0]));
 ---
-<Base title={`Tren ${n} — Trenes a tiempo`}>
-  <nav class="breadcrumb"><a href="/">← Buscador</a></nav>
-  <h1>Tren nº {n}</h1>
-  {items.length === 0 && (
-    <div class="card muted">No hay ningún tren con ese número en circulación o programado hoy.</div>
+<Base title={`Tren ${n} · ${relDay(day, today)} — Trenes a tiempo`}>
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › Tren nº {n}</nav>
+  <h1>Tren nº {n} · {relDay(day, today)}</h1>
+  {error && <div class="card alert" role="alert">Error de consulta. Inténtalo de nuevo.</div>}
+  {!error && items.length === 0 && (
+    <div class="card muted">No hay ningún tren con ese número programado el
+      {' '}{relDay(day, today).toLowerCase()} en el horario oficial vigente.</div>
   )}
   {items.length > 0 && (
     <div class="card">
-      <p class="muted">Instancias encontradas hoy:</p>
+      <p class="muted">Varias circulaciones comparten este número el {relDay(day, today).toLowerCase()}
+        (p. ej. en núcleos distintos). Elige la tuya:</p>
       <table class="board"><tbody>
         {items.map((t: any) => {
           const d = fmtDelay(t.fleet_delay != null ? t.fleet_delay * 60 : t.delay);
           return (
             <tr>
-              <td>{t.line ? <span class="line-tag">{t.line}</span> : ''}</td>
-              <td><a href={`/tren/${t.feed}/${encodeURIComponent(t.trip_id)}`}>{t.trip_id}</a></td>
-              <td><span class={`badge ${d.cls}`}>{d.text}</span></td>
+              <td><LineBadge line={t.line_info} fallback={t.line} /></td>
+              <td><a href={href(t)}>{t.trip_id}</a></td>
+              <td>{day === today
+                ? <span class={`badge ${d.cls}`}>{d.text}</span>
+                : <span class="badge nodata">programado</span>}</td>
             </tr>
           );
         })}

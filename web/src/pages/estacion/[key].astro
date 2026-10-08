@@ -3,79 +3,83 @@ import Base from '../../layouts/Base.astro';
 import Board from '../../components/Board.svelte';
 import FavStar from '../../components/FavStar.svelte';
 import AlertButton from '../../components/AlertButton.svelte';
-import { api } from '../../lib/api';
+import LineBadge from '../../components/LineBadge.svelte';
+import IncidentCard from '../../components/IncidentCard.svelte';
+import SourceStatus from '../../components/SourceStatus.svelte';
+import DateBar from '../../components/DateBar.astro';
+import { api, coverageMax, feedsOf } from '../../lib/api';
 import { FEED_NAME } from '../../lib/format';
+import { madridToday } from '../../lib/dates';
 
 const key = Astro.params.key || '';
 const pairs = key.split(',').map((p) => p.trim().split(':')).filter((p) => p.length === 2);
 if (!pairs.length) return Astro.redirect('/');
 
+const today = madridToday();
 const date = Astro.url.searchParams.get('date') || '';
 const time = Astro.url.searchParams.get('time') || '';
 
-let infos: any[] = [];
+const infos = (await Promise.all(
+  pairs.map(([f, s]) => api.station(f, s).catch(() => null)),
+)).filter(Boolean) as any[];
+if (!infos.length) return new Response(null, { status: 404, statusText: 'Not found' });
+
 let board: any = { items: [] };
-let alerts: any[] = [];
-let punct: any = null;
-let coverage: any = null;
-try {
-  infos = (await Promise.all(
-    pairs.map(([f, s]) => api.station(f, s).catch(() => null)),
-  )).filter(Boolean);
-  if (!infos.length) return Astro.redirect('/');
-  [board, coverage] = await Promise.all([
-    api.board(key, 'departures', 180, date || undefined, time || undefined),
-    api.coverage().catch(() => null),
-  ]);
-  const alertLists = await Promise.all(
-    infos.map((i) => api.alerts(i.feed, i.stop_id).catch(() => [])),
-  );
-  const seen = new Set();
-  alerts = alertLists.flat().filter((a) => (seen.has(a.id) ? false : seen.add(a.id)));
-  punct = await api.punctuality(infos[0].feed, infos[0].stop_id, 7).catch(() => null);
-} catch (e) {
-  return Astro.redirect('/');
-}
+let boardError = false;
+const [b, coverage, inc, punct] = await Promise.all([
+  api.board(key, 'departures', 180, date || undefined, time || undefined)
+    .catch(() => { boardError = true; return null; }),
+  api.coverage().catch(() => null),
+  api.incidencias({ estacion: key }).catch(() => null),
+  api.punctuality(infos[0].feed, infos[0].stop_id, 7).catch(() => null),
+]);
+if (b) board = b;
 const name = infos[0].name;
 const networks = [...new Set(infos.map((i) => FEED_NAME[i.feed] || i.network))];
+const lines = infos.flatMap((i) => i.lines || []);
 const canonical = `/estacion/${key}`;
-const maxDate = coverage
-  ? Object.values(coverage.feeds || {}).map((f: any) => f.last_day).sort().reverse()[0]
-  : undefined;
+const maxDate = coverageMax(coverage, feedsOf(key));
+const here = (inc?.items || []).filter((a: any) =>
+  ['station', 'line', 'line_mentions_station'].includes(a.relevance));
+const elsewhere = (inc?.items || []).filter((a: any) => a.relevance === 'line_other_station');
 ---
-<Base title={`${name} — horarios y retrasos | Trenes a tiempo`}
-    description={`Próximas salidas y llegadas en ${name}: horarios programados, estimaciones en tiempo real, retrasos y avisos de Renfe.`}
+<Base title={`${name} — horarios, líneas y avisos | Trenes a tiempo`}
+    description={`Próximas salidas y llegadas en ${name}: horarios programados, estimaciones en tiempo real, retrasos, líneas y avisos oficiales de Renfe.`}
     canonical={canonical}>
-  <nav class="breadcrumb"><a href="/">← Buscador</a></nav>
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › <a href="/estaciones">Estaciones</a> › {name}</nav>
   <div class="title-row">
     <h1>{name}</h1>
     <FavStar client:load k={key} name={name} />
   </div>
-  <p class="muted">{networks.join(' + ')}</p>
-  {infos[0].geo && (
-    <p class="muted geo-line">
-      {infos[0].geo.poblacion && <>{infos[0].geo.poblacion} · </>}
-      <a href={`/provincias/${infos[0].geo.provincia_slug}`}>{infos[0].geo.provincia}</a> ·{' '}
-      <a href={`/comunidades/${infos[0].geo.ccaa_slug}`}>{infos[0].geo.ccaa}</a>
+  <p class="muted">{networks.join(' + ')}
+    {infos[0].geo && (
+      <> · {infos[0].geo.poblacion && <>{infos[0].geo.poblacion} · </>}
+        <a href={`/provincias/${infos[0].geo.provincia_slug}`}>{infos[0].geo.provincia}</a> ·{' '}
+        <a href={`/comunidades/${infos[0].geo.ccaa_slug}`}>{infos[0].geo.ccaa}</a></>
+    )}
+  </p>
+  {lines.length > 0 && (
+    <p class="lines" aria-label="Líneas que paran aquí">
+      {lines.map((l: any) => <LineBadge line={l} showNucleo={false} />)}
+      {lines[0]?.nucleo && <span class="muted small">{lines[0].nucleo.brand} {lines[0].nucleo.name}</span>}
     </p>
   )}
   <AlertButton client:load cfg={{ type: 'station', station_key: key }} label={name} />
 
-  {alerts.map((a) => (
-    <div class="card alert" role="alert">
-      <strong>Aviso:</strong> {a.text || 'Incidencia notificada por Renfe'}
-    </div>
-  ))}
+  {here.map((a: any) => <IncidentCard a={a} context="station" />)}
+  {elsewhere.length > 0 && (
+    <details class="others"><summary>{elsewhere.length} aviso{elsewhere.length === 1 ? '' : 's'} de estas líneas en otras estaciones</summary>
+      {elsewhere.map((a: any) => <IncidentCard a={a} context="station" compact />)}
+    </details>
+  )}
+  {inc && infos.some((i) => i.feed === 'cer') && here.length === 0 &&
+    <SourceStatus source={inc.source} count={0} />}
 
-  <form class="dtbar card tight" method="get" action={`/estacion/${key}`}>
-    <label>Fecha <input type="date" name="date" value={date} min={coverage?.today}
-      max={maxDate} /></label>
-    <label>Hora <input type="time" name="time" value={time} /></label>
-    <button type="submit">Consultar</button>
-    {(date || time) && <a class="today" href={`/estacion/${key}`}>Ahora</a>}
-  </form>
+  <DateBar action={`/estacion/${key}`} date={date || today} time={time} max={maxDate} />
 
   <div class="card">
+    {boardError && <p class="errnote" role="alert">Error de consulta: no se ha podido cargar el
+      panel. Se reintentará automáticamente.</p>}
     <Board client:load stops={key} initialItems={board.items}
       initialMeta={board} initialKind="departures" date={date} time={time} />
   </div>
@@ -101,11 +105,8 @@ const maxDate = coverage
 <style>
   .title-row { display: flex; align-items: baseline; gap: .5rem; }
   .title-row h1 { margin-bottom: .2rem; }
-  .dtbar { display: flex; gap: .7rem; align-items: end; flex-wrap: wrap; font-size: .85rem; }
-  .dtbar label { display: flex; flex-direction: column; gap: .2rem; color: var(--muted); }
-  .dtbar input { font-size: .9rem; padding: .4rem .5rem; }
-  .dtbar button { padding: .45rem .9rem; border-radius: 8px; border: 1px solid var(--border);
-                  background: var(--accent); color: var(--accent-fg); font-weight: 600;
-                  cursor: pointer; }
-  .dtbar .today { align-self: center; font-size: .85rem; }
+  .lines { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin: .2rem 0 .5rem; }
+  .small { font-size: .78rem; }
+  .others summary { cursor: pointer; font-size: .82rem; color: var(--muted); margin: .3rem 0; }
+  .errnote { color: var(--warn); font-size: .82rem; margin: .2rem 0; }
 </style>

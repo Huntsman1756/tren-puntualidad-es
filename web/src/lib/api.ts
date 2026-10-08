@@ -9,6 +9,12 @@ export interface StationGroup {
   name: string; lat: number | null; lon: number | null;
   stops: StopRef[]; networks: string[];
 }
+export interface LineInfo {
+  code: string; slug: string | null; family: string | null; family_slug: string | null;
+  nucleo: { code: string; slug: string; name: string; brand: string } | null;
+  label: string; url: string | null; mode: string | null; status: string;
+  color: string | null; text_color: string | null;
+}
 
 export function stopsKey(stops: StopRef[]): string {
   return stops.map((s) => `${s.feed}:${s.stop_id}`).join(',');
@@ -16,32 +22,64 @@ export function stopsKey(stops: StopRef[]): string {
 
 async function get(path: string, base = API) {
   const r = await fetch(base + path, { signal: AbortSignal.timeout(15000) });
-  if (!r.ok) throw new Error(`${path} -> ${r.status}`);
+  if (!r.ok) {
+    const e: any = new Error(`${path} -> ${r.status}`);
+    e.status = r.status;
+    throw e;
+  }
   return r.json();
 }
+
+const q = (o: Record<string, any>) => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(o)) {
+    if (v !== undefined && v !== null && v !== '' && v !== false) p.set(k, String(v));
+  }
+  const s = p.toString();
+  return s ? `?${s}` : '';
+};
 
 export const api = {
   station: (feed: string, id: string) => get(`/api/v1/stations/${feed}/${id}`),
   board: (stops: string, kind = 'departures', minutes = 180,
           date?: string, time?: string, semidirect = false) =>
-    get(`/api/v1/stations/board?stops=${encodeURIComponent(stops)}&kind=${kind}`
-      + `&minutes=${minutes}${date ? `&date=${date}` : ''}${time ? `&time=${time}` : ''}`
-      + (semidirect ? '&semidirect=true' : '')),
+    get(`/api/v1/stations/board${q({ stops, kind, minutes, date, time, semidirect })}`),
   journeys: (from: string, to: string,
              opts: { date?: string; time?: string; hours?: number; semidirect?: boolean } = {}) =>
-    get(`/api/v1/journeys?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
-      + `${opts.date ? `&date=${opts.date}` : ''}${opts.time ? `&time=${opts.time}` : ''}`
-      + `${opts.hours ? `&hours=${opts.hours}` : ''}${opts.semidirect ? '&semidirect=true' : ''}`),
-  train: (feed: string, id: string) =>
-    get(`/api/v1/trains/${feed}/${encodeURIComponent(id)}`),
+    get(`/api/v1/journeys${q({ from, to, ...opts })}`),
+  plan: (from: string, to: string,
+         opts: { date?: string; time?: string; hours?: number; semidirect?: boolean } = {}) =>
+    get(`/api/v1/journeys/plan${q({ from, to, ...opts })}`),
+  train: (feed: string, id: string, date?: string) =>
+    get(`/api/v1/trains/${feed}/${encodeURIComponent(id)}${q({ date })}`),
   trainByNumber: (n: string, date?: string) =>
-    get(`/api/v1/trains/by-number/${encodeURIComponent(n)}${date ? `?date=${date}` : ''}`),
-  ranking: (limit = 50) => get(`/api/v1/delays/ranking?limit=${limit}`),
-  alerts: (feed = 'cer', stop?: string) =>
-    get(`/api/v1/alerts?feed=${feed}${stop ? `&stop_id=${stop}` : ''}`),
+    get(`/api/v1/trains/by-number/${encodeURIComponent(n)}${q({ date })}`),
+  ranking: (limit = 50, opts: { nucleo?: string; linea?: string; min_delay?: number } = {}) =>
+    get(`/api/v1/delays/ranking${q({ limit, ...opts })}`),
+  delaysByLine: (opts: { nucleo?: string; min_delay?: number } = {}) =>
+    get(`/api/v1/delays/lines${q(opts)}`),
+  incidencias: (opts: Record<string, string | undefined> = {}) =>
+    get(`/api/v1/incidencias${q(opts)}`),
+  incidencia: (feed: string, id: string) =>
+    get(`/api/v1/incidencias/${feed}/${encodeURIComponent(id)}`),
+  nucleos: () => get('/api/v1/nucleos'),
+  nucleo: (slug: string) => get(`/api/v1/nucleos/${slug}`),
+  linea: (n: string, l: string) => get(`/api/v1/lineas/${n}/${l}`),
   status: () => get('/api/v1/meta/status'),
   dataStatus: () => get('/api/v1/data/status'),
   coverage: () => get('/api/v1/meta/coverage'),
   punctuality: (feed: string, id: string, days = 7) =>
     get(`/api/v1/stations/${feed}/${id}/punctuality?days=${days}`),
 };
+
+/** Último día válido común a las redes indicadas (o a todas). */
+export function coverageMax(cov: any, feeds?: string[]): string | undefined {
+  if (!cov?.feeds) return undefined;
+  const fs = (feeds?.length ? feeds : Object.keys(cov.feeds))
+    .map((f) => cov.feeds[f]?.last_day).filter(Boolean).sort();
+  return fs[0];
+}
+
+export function feedsOf(key: string): string[] {
+  return [...new Set(key.split(',').map((p) => p.split(':')[0]).filter(Boolean))];
+}

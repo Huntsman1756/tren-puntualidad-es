@@ -11,6 +11,15 @@ const siteOrigin = (typeof process !== 'undefined' && process.env?.PUBLIC_SITE_U
   || `${fwdProto}://${fwdHost}`;
 const canonicalUrl = canonical ? new URL(canonical, siteOrigin).href
   : `${siteOrigin}${Astro.url.pathname}`;
+const path = Astro.url.pathname;
+const NAV = [
+  ['/horarios', 'Horarios'], ['/estaciones', 'Estaciones'], ['/lineas', 'Líneas'],
+  ['/nucleos', 'Núcleos'], ['/incidencias', 'Incidencias'], ['/retrasos', 'Retrasos'],
+  ['/favoritos', 'Favoritos'],
+];
+const isCur = (href: string) => path === href || path.startsWith(href + '/')
+  || (href === '/estaciones' && path.startsWith('/estacion/'))
+  || (href === '/nucleos' && path.startsWith('/nucleos/'));
 ---
 <!doctype html>
 <html lang="es">
@@ -63,14 +72,27 @@ const canonicalUrl = canonical ? new URL(canonical, siteOrigin).href
     a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
     summary:focus-visible {
       outline: 2px solid var(--accent); outline-offset: 2px; }
-    .wrap { max-width: 800px; margin: 0 auto; padding: 1rem; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 1rem; }
     header.site { border-bottom: 1px solid var(--border); padding: .7rem 1rem;
                   position: sticky; top: 0; background: var(--bg); z-index: 20; }
     header.site .wrap { display: flex; gap: 1rem; align-items: center;
                         flex-wrap: wrap; padding: 0 .4rem; }
     header.site a.brand { color: var(--text); font-weight: 700; font-size: 1.05rem;
                           display: flex; align-items: center; gap: .45rem; }
-    nav { display: flex; gap: .3rem; margin-left: auto; }
+    nav#main-nav { display: flex; gap: .15rem; margin-left: auto; flex-wrap: wrap; }
+    .menu-btn { display: none; margin-left: auto; border: 1px solid var(--border);
+                background: var(--card); color: var(--text); border-radius: 8px;
+                padding: .4rem .7rem; cursor: pointer; font-size: .9rem; min-height: 40px; }
+    .skip { position: absolute; left: -999px; top: 0; background: var(--accent);
+            color: var(--accent-fg); padding: .5rem .8rem; z-index: 50; }
+    .skip:focus { left: .5rem; top: .5rem; }
+    @media (max-width: 760px) {
+      .menu-btn { display: inline-flex; gap: .3rem; align-items: center; }
+      nav#main-nav { display: none; order: 10; width: 100%; flex-direction: column;
+                     margin: .4rem 0 .2rem; }
+      header.site[data-open] nav#main-nav { display: flex; }
+      nav#main-nav a { padding: .65rem .6rem; font-size: 1rem; }
+    }
     nav a { color: var(--muted); font-size: .88rem; padding: .35rem .6rem;
             border-radius: 8px; }
     nav a:hover { color: var(--text); background: var(--card2); }
@@ -123,20 +145,22 @@ const canonicalUrl = canonical ? new URL(canonical, siteOrigin).href
   </style>
 </head>
 <body>
+  <a class="skip" href="#contenido">Saltar al contenido</a>
   <header class="site">
     <div class="wrap">
       <a class="brand" href="/">🚆 <span>Trenes a tiempo</span></a>
-      <nav aria-label="Principal">
-        <a href="/estaciones">Estaciones</a>
-        <a href="/retrasos">Retrasos</a>
-        <a href="/estado">Estado</a>
-        <a href="/fuentes">Fuentes</a>
+      <button class="menu-btn" id="menu-toggle" aria-expanded="false"
+              aria-controls="main-nav">☰ <span>Menú</span></button>
+      <nav aria-label="Principal" id="main-nav">
+        {NAV.map(([href, label]) => (
+          <a href={href} aria-current={isCur(href) ? 'page' : undefined}>{label}</a>
+        ))}
       </nav>
       <button class="theme-btn" id="theme-toggle" aria-label="Cambiar tema"
               title="Cambiar tema">◐</button>
     </div>
   </header>
-  <main class="wrap">
+  <main class="wrap" id="contenido">
     <slot />
   </main>
   <footer class="site">
@@ -144,12 +168,19 @@ const canonicalUrl = canonical ? new URL(canonical, siteOrigin).href
       <p>Origen de los datos: Renfe Operadora (portal de datos abiertos data.renfe.com,
         licencia CC-BY 4.0). Proyecto independiente, no oficial, no afiliado ni
         patrocinado por Renfe.</p>
-      <p>La ausencia de dato en tiempo real no implica puntualidad.
-        <a href="/fuentes">Metodología y limitaciones</a> ·
+      <p>La ausencia de dato en tiempo real no implica puntualidad.{' '}
+        <a href="/fuentes">Metodología y limitaciones</a>{' · '}
+        <a href="/estado">Estado de los datos</a>{' · '}
         <a href="/privacidad">Privacidad</a></p>
     </div>
   </footer>
   <script is:inline>
+    document.getElementById('menu-toggle')?.addEventListener('click', (e) => {
+      const h = document.querySelector('header.site');
+      const open = !h.hasAttribute('data-open');
+      open ? h.setAttribute('data-open', '') : h.removeAttribute('data-open');
+      e.currentTarget.setAttribute('aria-expanded', String(open));
+    });
     document.getElementById('theme-toggle')?.addEventListener('click', () => {
       const cur = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
       document.documentElement.dataset.theme = cur;

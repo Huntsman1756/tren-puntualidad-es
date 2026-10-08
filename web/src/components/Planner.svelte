@@ -1,43 +1,67 @@
 <script>
   import { onMount } from 'svelte';
   import StationField from './StationField.svelte';
-  import { PUBLIC_API, stopsKey } from '../lib/api';
+  import { PUBLIC_API, stopsKey, coverageMax } from '../lib/api';
   import { pushHistory } from '../lib/favs';
+  import { addDays, madridToday, relDay, weekendStart } from '../lib/dates';
 
-  let tab = 'journey';          // journey | station | train
+  export let initialDate = '';     // de la URL (?date=)
+  export let initialTime = '';     // de la URL (?time=)
+  export let initialTab = 'journey';
+
+  let tab = initialTab;            // journey | station | train
   let from = null, to = null;
   let station = null;
   let trainNum = '';
-  let date = '', time = '';
+  let today = madridToday();
+  let date = initialDate || today;
+  // Hora: vacía = "ahora" si es hoy, "todo el día" si es otra fecha.
+  // Solo se conserva una hora si el usuario la eligió expresamente.
+  let time = initialTime || '';
   let semidirect = false;
   let coverage = null;
+  let picking = !!initialDate && ![today, addDays(today, 1), weekendStart(today)].includes(initialDate);
 
   onMount(async () => {
+    today = madridToday();
+    if (!initialDate) date = today;
     try {
       const r = await fetch(`${PUBLIC_API}/api/v1/meta/coverage`);
-      coverage = await r.json();
-    } catch {}
-    // fecha por defecto = hoy; hora por defecto = ahora
-    const n = new Date();
-    date = n.toISOString().slice(0, 10);
-    time = `${String(n.getHours()).padStart(2, '0')}:${String(n.getMinutes()).padStart(2, '0')}`;
+      if (r.ok) coverage = await r.json();
+    } catch { /* sin cobertura: el servidor valida igualmente */ }
   });
 
-  $: maxDate = coverage
-    ? Object.values(coverage.feeds || {})
-        .map((f) => f.last_day).sort().reverse()[0]
-    : undefined;
-  $: minDate = coverage?.today;
+  $: feeds = tab === 'journey'
+    ? [...new Set([...(from?.stops || []), ...(to?.stops || [])].map((s) => s.feed))]
+    : tab === 'station' ? [...new Set((station?.stops || []).map((s) => s.feed))] : [];
+  $: maxDate = coverageMax(coverage, feeds);
+  $: outOfRange = !!(maxDate && date > maxDate) || date < today;
+  $: tomorrow = addDays(today, 1);
+  $: weekend = weekendStart(today);
+  $: shortcut = date === today ? 'today' : date === tomorrow ? 'tomorrow'
+    : date === weekend ? 'weekend' : 'pick';
+  $: timeHint = time ? `desde las ${time}` : date === today ? 'desde ahora' : 'todo el día';
+
+  function setDay(d) {
+    date = d;
+    picking = false;
+    // cambiar de día no arrastra la hora actual
+    time = '';
+  }
 
   function swap() { [from, to] = [to, from]; }
+
+  function dateParams(p) {
+    if (date && date !== today) p.set('date', date);
+    if (time) { p.set('time', time); if (date === today) p.set('date', date); }
+    return p;
+  }
 
   function goJourney() {
     if (!from || !to) return;
     pushHistory({ key: stopsKey(from.stops), name: from.name });
     pushHistory({ key: stopsKey(to.stops), name: to.name });
-    const p = new URLSearchParams({ from: stopsKey(from.stops), to: stopsKey(to.stops) });
-    if (date) p.set('date', date);
-    if (time) p.set('time', time);
+    const p = dateParams(new URLSearchParams({ from: stopsKey(from.stops), to: stopsKey(to.stops) }));
     if (semidirect) p.set('semidirect', '1');
     location.href = `/trayecto?${p}`;
   }
@@ -45,12 +69,18 @@
   function goStation() {
     if (!station) return;
     pushHistory({ key: stopsKey(station.stops), name: station.name });
-    location.href = `/estacion/${stopsKey(station.stops)}`;
+    const p = dateParams(new URLSearchParams());
+    const qs = p.toString();
+    location.href = `/estacion/${stopsKey(station.stops)}${qs ? `?${qs}` : ''}`;
   }
 
   function goTrain() {
     const n = trainNum.replace(/\D/g, '');
-    if (n.length >= 3) location.href = `/tren-numero/${n}`;
+    if (n.length < 3) return;
+    const p = dateParams(new URLSearchParams());
+    p.delete('time');
+    const qs = p.toString();
+    location.href = `/tren-numero/${n}${qs ? `?${qs}` : ''}`;
   }
 </script>
 
@@ -65,50 +95,79 @@
   </div>
 
   {#if tab === 'journey'}
-    <div class="form" on:keydown={(e) => e.key === 'Enter' && goJourney()}>
-      <div class="od">
-        <StationField label="Origen" placeholder="Origen" inputId="from"
-                      bind:value={from} autoFocus />
-        <button class="swap" on:click={swap} aria-label="Intercambiar origen y destino"
-                title="Intercambiar" type="button">⇅</button>
-        <StationField label="Destino" placeholder="Destino" inputId="to" bind:value={to} />
-      </div>
-      <div class="row">
-        <div class="dt">
-          <label for="jdate">Fecha</label>
-          <input id="jdate" type="date" bind:value={date} min={minDate} max={maxDate} />
-        </div>
-        <div class="dt">
-          <label for="jtime">Desde las</label>
-          <input id="jtime" type="time" bind:value={time} />
-        </div>
-        <label class="chk">
-          <input type="checkbox" bind:checked={semidirect} />
-          Solo semidirectos
-        </label>
-      </div>
-      <button class="go" on:click={goJourney} disabled={!from || !to}>
-        Ver trenes {from && to ? `${from.name} → ${to.name}` : ''}
-      </button>
+    <div class="od" on:keydown={(e) => e.key === 'Enter' && goJourney()} role="group">
+      <StationField label="Origen" placeholder="Origen" inputId="from"
+                    bind:value={from} autoFocus />
+      <button class="swap" on:click={swap} aria-label="Intercambiar origen y destino"
+              title="Intercambiar" type="button">⇅</button>
+      <StationField label="Destino" placeholder="Destino" inputId="to" bind:value={to} />
     </div>
   {:else if tab === 'station'}
-    <div class="form" on:keydown={(e) => e.key === 'Enter' && goStation()}>
+    <div on:keydown={(e) => e.key === 'Enter' && goStation()} role="group">
       <StationField label="Estación" placeholder="Busca una estación (p. ej. Atocha, Sants)"
                     inputId="station" bind:value={station} autoFocus />
-      <button class="go" on:click={goStation} disabled={!station}>
-        Ver salidas y llegadas
-      </button>
     </div>
   {:else}
-    <div class="form" on:keydown={(e) => e.key === 'Enter' && goTrain()}>
+    <div on:keydown={(e) => e.key === 'Enter' && goTrain()} role="group">
       <label class="sr-only" for="tnum">Número de tren</label>
       <input id="tnum" type="text" inputmode="numeric" pattern="[0-9]*"
              placeholder="Nº comercial del tren (p. ej. 06180, 21232)"
              bind:value={trainNum} />
-      <button class="go" on:click={goTrain} disabled={trainNum.trim().length < 3}>
-        Localizar tren
-      </button>
     </div>
+  {/if}
+
+  <fieldset class="when">
+    <legend class="sr-only">Fecha</legend>
+    <div class="chips" role="radiogroup" aria-label="Fecha">
+      <button type="button" role="radio" aria-checked={shortcut === 'today'}
+              class:on={shortcut === 'today' && !picking} on:click={() => setDay(today)}>Hoy</button>
+      <button type="button" role="radio" aria-checked={shortcut === 'tomorrow'}
+              class:on={shortcut === 'tomorrow' && !picking} on:click={() => setDay(tomorrow)}>Mañana</button>
+      <button type="button" role="radio" aria-checked={shortcut === 'weekend'}
+              class:on={shortcut === 'weekend' && !picking}
+              on:click={() => setDay(weekend)}
+              title={relDay(weekend, today)}>Fin de semana</button>
+      <button type="button" role="radio" aria-checked={shortcut === 'pick' || picking}
+              class:on={shortcut === 'pick' || picking} on:click={() => (picking = true)}>Elegir fecha</button>
+    </div>
+    <div class="row">
+      {#if picking || shortcut === 'pick'}
+        <div class="dt">
+          <label for="pdate">Fecha</label>
+          <input id="pdate" type="date" bind:value={date} min={today} max={maxDate}
+                 on:change={() => (time = '')} />
+        </div>
+      {/if}
+      {#if tab !== 'train'}
+        <div class="dt">
+          <label for="ptime">Hora <span class="muted">(opcional)</span></label>
+          <div class="tline">
+            <input id="ptime" type="time" bind:value={time} />
+            {#if time}<button type="button" class="link" on:click={() => (time = '')}>
+              {date === today ? 'Ahora' : 'Todo el día'}</button>{/if}
+          </div>
+        </div>
+      {/if}
+      {#if tab === 'journey'}
+        <label class="chk"><input type="checkbox" bind:checked={semidirect} /> Solo semidirectos</label>
+      {/if}
+    </div>
+    <p class="when-sum muted" aria-live="polite">
+      {relDay(date, today)} · {tab === 'train' ? 'instancia del día elegido' : timeHint}
+      {#if outOfRange}<span class="warn"> — fuera del horario oficial disponible
+        {maxDate ? `(hasta ${relDay(maxDate, today)})` : ''}</span>{/if}
+    </p>
+  </fieldset>
+
+  {#if tab === 'journey'}
+    <button class="go" on:click={goJourney} disabled={!from || !to || outOfRange}>
+      Ver trenes {from && to ? `${from.name} → ${to.name}` : ''}</button>
+  {:else if tab === 'station'}
+    <button class="go" on:click={goStation} disabled={!station || outOfRange}>
+      Ver salidas y llegadas</button>
+  {:else}
+    <button class="go" on:click={goTrain} disabled={trainNum.trim().length < 3 || outOfRange}>
+      Localizar tren</button>
   {/if}
 </div>
 
@@ -118,27 +177,37 @@
   .tabs button {
     flex: 1; padding: .55rem 0; border-radius: 10px; cursor: pointer;
     border: 1px solid var(--border); background: transparent;
-    color: var(--muted); font-size: .9rem; font-weight: 500;
+    color: var(--muted); font-size: .9rem; font-weight: 500; min-height: 44px;
   }
   .tabs button.on { background: var(--accent); border-color: transparent;
                     color: var(--accent-fg); font-weight: 700; }
-  .form { display: flex; flex-direction: column; gap: .7rem; }
   .od { display: grid; grid-template-columns: 1fr auto 1fr; gap: .5rem; align-items: center; }
   .swap {
-    width: 2.2rem; height: 2.2rem; border-radius: 50%; border: 1px solid var(--border);
+    width: 2.4rem; height: 2.4rem; border-radius: 50%; border: 1px solid var(--border);
     background: var(--card); color: var(--muted); cursor: pointer; font-size: 1rem;
   }
   .swap:hover { color: var(--accent); border-color: var(--accent); }
+  .when { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .5rem; }
+  .chips { display: flex; gap: .35rem; flex-wrap: wrap; }
+  .chips button { border: 1px solid var(--border); background: transparent; color: var(--muted);
+                  border-radius: 999px; padding: .4rem .85rem; cursor: pointer; font-size: .85rem;
+                  min-height: 36px; }
+  .chips button.on { border-color: var(--accent); color: var(--accent); font-weight: 650;
+                     background: var(--accent-dim); }
   .row { display: flex; gap: .6rem; align-items: end; flex-wrap: wrap; }
-  .dt { display: flex; flex-direction: column; gap: .25rem; flex: 1; min-width: 120px; }
+  .dt { display: flex; flex-direction: column; gap: .25rem; min-width: 130px; }
   .dt label { font-size: .75rem; color: var(--muted); }
+  .tline { display: flex; gap: .4rem; align-items: center; }
+  .link { background: none; border: 0; color: var(--accent); cursor: pointer; font-size: .8rem; }
   .chk { display: flex; align-items: center; gap: .45rem; font-size: .85rem;
          color: var(--muted); white-space: nowrap; padding-bottom: .55rem; }
   .chk input { width: auto; accent-color: var(--accent); }
+  .when-sum { font-size: .8rem; margin: 0; }
+  .warn { color: var(--warn); }
   .go {
-    padding: .7rem; border-radius: 10px; border: 0; cursor: pointer;
+    padding: .75rem; border-radius: 10px; border: 0; cursor: pointer;
     background: var(--accent); color: var(--accent-fg);
-    font-size: .95rem; font-weight: 600;
+    font-size: .95rem; font-weight: 600; min-height: 44px;
   }
   .go:disabled { opacity: .45; cursor: default; }
   @media (max-width: 560px) {

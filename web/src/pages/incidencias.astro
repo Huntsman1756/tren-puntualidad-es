@@ -1,0 +1,134 @@
+---
+import Base from '../layouts/Base.astro';
+import IncidentCard from '../components/IncidentCard.svelte';
+import SourceStatus from '../components/SourceStatus.svelte';
+import { api } from '../lib/api';
+
+const sp = Astro.url.searchParams;
+const f = {
+  nucleo: sp.get('nucleo') || '',
+  linea: sp.get('linea') || '',
+  estacion: sp.get('estacion') || '',
+  categoria: sp.get('categoria') || '',
+  periodo: sp.get('periodo') || 'actuales',
+};
+let data: any = null;
+let nucleos: any[] = [];
+let error: string | null = null;
+let stationName = '';
+try {
+  [data, nucleos] = await Promise.all([
+    api.incidencias({
+      nucleo: f.nucleo || undefined,
+      linea: f.nucleo && f.linea ? f.linea : undefined,
+      estacion: f.estacion || undefined,
+      categoria: f.categoria || undefined,
+      periodo: f.periodo,
+    }),
+    api.nucleos().catch(() => []),
+  ]);
+  if (f.estacion) {
+    const [fe, st] = f.estacion.split(',')[0].split(':');
+    stationName = await api.station(fe, st).then((s: any) => s.name).catch(() => st);
+  }
+} catch (e: any) {
+  error = e?.status === 404 ? 'Núcleo o línea desconocidos.' : 'No se han podido cargar las incidencias.';
+}
+const nuc = nucleos.find((n: any) => n.slug === f.nucleo);
+const CATS: Record<string, string> = data?.categories || {
+  accesibilidad: 'Accesibilidad', obras: 'Obras programadas',
+  interrumpido: 'Servicio interrumpido', alternativo: 'Servicio alternativo',
+  otras: 'Otras afectaciones',
+};
+const PERIODS: Record<string, string> = {
+  actuales: 'Publicadas ahora', vigentes: 'Vigentes ahora', proximas: 'Próximas',
+  recientes: 'Retiradas (7 días)', todas: 'Todas (7 días)',
+};
+const scopeTitle = f.estacion ? `en ${stationName}`
+  : nuc ? (f.linea ? `línea ${nuc.lines.find((l: any) => l.slug === f.linea)?.code
+           ?? nuc.lines.flatMap((l: any) => l.variants).find((v: any) => v.slug === f.linea)?.code
+           ?? f.linea} · ${nuc.name}` : `núcleo ${nuc.name}`)
+  : 'en Cercanías y Rodalies';
+---
+<Base title={`Incidencias ${scopeTitle} — Trenes a tiempo`}
+      description="Avisos oficiales de Renfe (GTFS-RT) por núcleo, línea y estación: obras, servicio interrumpido, servicios alternativos y accesibilidad.">
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › Incidencias</nav>
+  <h1>Incidencias {scopeTitle}</h1>
+  <p class="muted">Avisos oficiales publicados por Renfe en su feed GTFS-RT. Mostramos el
+    alcance tal como lo declara Renfe (estación o línea) y clasificamos cada aviso con
+    reglas explícitas; no inventamos severidades.</p>
+
+  <form class="filters card tight" method="get" action="/incidencias">
+    <label>Núcleo
+      <select name="nucleo">
+        <option value="">Todos</option>
+        {nucleos.map((n: any) => <option value={n.slug} selected={n.slug === f.nucleo}>{n.name}</option>)}
+      </select>
+    </label>
+    {nuc && (
+      <label>Línea
+        <select name="linea">
+          <option value="">Todas</option>
+          {nuc.lines.map((l: any) => (
+            <>
+              <option value={l.slug} selected={l.slug === f.linea}>{l.code}</option>
+              {l.variants.filter((v: any) => v.slug !== l.slug).map((v: any) =>
+                <option value={v.slug} selected={v.slug === f.linea}>&nbsp;&nbsp;{v.code}</option>)}
+            </>
+          ))}
+        </select>
+      </label>
+    )}
+    <label>Tipo
+      <select name="categoria">
+        <option value="">Todos</option>
+        {Object.entries(CATS).map(([k, v]) => <option value={k} selected={k === f.categoria}>{v}</option>)}
+      </select>
+    </label>
+    <label>Periodo
+      <select name="periodo">
+        {Object.entries(PERIODS).map(([k, v]) => <option value={k} selected={k === f.periodo}>{v}</option>)}
+      </select>
+    </label>
+    {f.estacion && <input type="hidden" name="estacion" value={f.estacion} />}
+    <button type="submit">Filtrar</button>
+    {(f.nucleo || f.categoria || f.estacion || f.periodo !== 'actuales') &&
+      <a href="/incidencias" class="reset">Quitar filtros</a>}
+  </form>
+
+  {error && <div class="card alert" role="alert">{error}</div>}
+  {data && (
+    <>
+      <SourceStatus source={data.source} count={data.total} />
+      {data.total > 0 && (
+        <p class="counts muted">
+          {data.total} aviso{data.total === 1 ? '' : 's'} ·{' '}
+          {Object.entries(data.counts.by_category).map(([k, n]) => (
+            <a href={`/incidencias?${new URLSearchParams({ ...Object.fromEntries(Object.entries(f).filter(([, v]) => v)), categoria: k })}`}
+               class="cnt">{CATS[k] || k}: {n as number}</a>
+          ))}
+        </p>
+      )}
+      {data.total === 0 && data.source?.status === 'ok' && (
+        <div class="card muted">No hay avisos oficiales {PERIODS[f.periodo].toLowerCase()} con estos
+          filtros. La fuente está operativa: la ausencia de avisos no garantiza que no haya
+          retrasos, consulta el <a href="/retrasos">ranking en vivo</a>.</div>
+      )}
+      {data.items.map((a: any) => <IncidentCard a={a} />)}
+    </>
+  )}
+  <p class="muted small">Fuente: Renfe Operadora, GTFS-RT Service Alerts
+    (<a href="https://data.renfe.com">data.renfe.com</a>, CC-BY 4.0). Auditoría técnica:
+    <a href="/api/v1/incidencias/audit">/api/v1/incidencias/audit</a>.
+    Renfe no publica avisos GTFS-RT para AV/Larga Distancia.</p>
+</Base>
+<style>
+  .filters { display: flex; gap: .6rem; flex-wrap: wrap; align-items: end; font-size: .85rem; }
+  .filters label { display: flex; flex-direction: column; gap: .2rem; color: var(--muted); }
+  .filters select { width: auto; font-size: .9rem; padding: .4rem .5rem; }
+  .filters button { padding: .5rem .9rem; border-radius: 8px; border: 0; background: var(--accent);
+                    color: var(--accent-fg); font-weight: 600; cursor: pointer; min-height: 40px; }
+  .reset { align-self: center; font-size: .85rem; }
+  .counts { font-size: .82rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+  .small { font-size: .75rem; margin-top: 1.5rem; }
+</style>

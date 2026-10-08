@@ -1,0 +1,61 @@
+---
+// Barra de fecha/hora sin JS: atajos Hoy / Mañana / Fin de semana /
+// Elegir fecha. Elegir un día NO arrastra la hora: sin hora = desde ahora
+// (hoy) o día completo (otra fecha).
+import { addDays, madridToday, relDay, weekendStart } from '../lib/dates';
+
+interface Props {
+  action: string; date: string; time?: string; max?: string;
+  hidden?: Record<string, string>; extra?: string; semidirect?: boolean;
+}
+const { action, date, time = '', max, hidden = {}, extra = '', semidirect = false } = Astro.props;
+const today = madridToday();
+const tomorrow = addDays(today, 1);
+const weekend = weekendStart(today);
+const href = (d: string) => {
+  const p = new URLSearchParams(hidden);
+  if (d !== today) p.set('date', d);
+  const s = p.toString();
+  return `${action}${s ? `?${s}` : ''}`;
+};
+const cur = date === today ? 'today' : date === tomorrow ? 'tomorrow' : date === weekend ? 'weekend' : 'pick';
+const beyond = !!(max && date > max);
+---
+<form class="datebar card tight" method="get" action={action}>
+  {Object.entries(hidden).filter(([k]) => k !== 'semidirect').map(([k, v]) =>
+    <input type="hidden" name={k} value={v} />)}
+  <div class="chips" aria-label="Fecha">
+    <a href={href(today)} aria-current={cur === 'today' ? 'true' : undefined}>Hoy</a>
+    <a href={href(tomorrow)} aria-current={cur === 'tomorrow' ? 'true' : undefined}>Mañana</a>
+    <a href={href(weekend)} aria-current={cur === 'weekend' ? 'true' : undefined}
+       title={relDay(weekend, today)}>Fin de semana</a>
+  </div>
+  <div class="fields">
+    <label>Elegir fecha <input type="date" name="date" value={date} min={today} max={max} /></label>
+    <label>Hora <input type="time" name="time" value={time} /></label>
+    {extra === 'semidirect' && (
+      <label class="chk"><input type="checkbox" name="semidirect" value="1" checked={semidirect} /> semidirectos</label>
+    )}
+    <button type="submit">Consultar</button>
+  </div>
+  <p class="sum muted">{relDay(date, today)} · {time ? `desde las ${time}` : date === today ? 'desde ahora' : 'día completo'}
+    {beyond && <span class="warn"> — fuera del horario oficial publicado (hasta {relDay(max!, today)})</span>}</p>
+</form>
+<style>
+  .datebar { display: flex; flex-direction: column; gap: .5rem; font-size: .85rem; }
+  .chips { display: flex; gap: .35rem; flex-wrap: wrap; }
+  .chips a { border: 1px solid var(--border); border-radius: 999px; padding: .35rem .8rem;
+             color: var(--muted); min-height: 34px; display: inline-flex; align-items: center; }
+  .chips a[aria-current] { border-color: var(--accent); color: var(--accent); font-weight: 650;
+                           background: var(--accent-dim); }
+  .fields { display: flex; gap: .6rem; align-items: end; flex-wrap: wrap; }
+  .fields label { display: flex; flex-direction: column; gap: .2rem; color: var(--muted); }
+  .fields .chk { flex-direction: row; align-items: center; gap: .4rem; padding-bottom: .5rem; }
+  .fields .chk input { width: auto; accent-color: var(--accent); }
+  .fields input { font-size: .9rem; padding: .4rem .5rem; }
+  .fields button { padding: .5rem .9rem; border-radius: 8px; border: 1px solid var(--border);
+                   background: var(--accent); color: var(--accent-fg); font-weight: 600;
+                   cursor: pointer; min-height: 40px; }
+  .sum { margin: 0; font-size: .78rem; }
+  .warn { color: var(--warn); }
+</style>

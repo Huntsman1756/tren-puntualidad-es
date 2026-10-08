@@ -22,6 +22,33 @@ def _migrate(c):
         "UPDATE observations SET source='legacy', kind='legacy' WHERE source IS NULL",
     ):
         c.execute(text(stmt))
+    migrate_push_v2(c)
+
+
+def migrate_push_v2(c):
+    """push_subs (una config por endpoint) -> push_devices + push_rules.
+
+    Idempotente: solo copia endpoints aún no migrados y vacía push_subs.
+    Los dispositivos migrados quedan con token_hash NULL hasta que su
+    navegador los reclame presentando el endpoint (la credencial que ya
+    usaba v0.3.x); a partir de ahí solo vale el token."""
+    c.execute(text("""
+        INSERT INTO push_devices (id, endpoint, p256dh, auth, token_hash,
+                                  created_at)
+        SELECT gen_random_uuid()::text, s.endpoint, s.p256dh, s.auth, NULL,
+               s.created_at
+        FROM push_subs s
+        WHERE NOT EXISTS (SELECT 1 FROM push_devices d
+                          WHERE d.endpoint = s.endpoint)"""))
+    c.execute(text("""
+        INSERT INTO push_rules (id, device_id, config, enabled,
+                                last_notify_key, last_notify_at, created_at,
+                                updated_at)
+        SELECT gen_random_uuid()::text, d.id, s.config, 1,
+               s.last_notify_key, s.last_notify_at, s.created_at, now()
+        FROM push_subs s JOIN push_devices d ON d.endpoint = s.endpoint
+        WHERE NOT EXISTS (SELECT 1 FROM push_rules r WHERE r.device_id = d.id)"""))
+    c.execute(text("DELETE FROM push_subs"))
 
 
 def wait_and_create(retries=30):

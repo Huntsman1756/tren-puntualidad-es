@@ -16,6 +16,7 @@ from collector.config import (
 from collector.db import engine, get_meta, set_meta, wait_and_create
 from collector.geo import run_geo
 from collector.gtfsutil import TZINFO
+from collector.lines import compute_trip_spans, refresh_lines
 from collector.push import run_push_cycle
 from collector.realtime import (
     poll_alerts,
@@ -118,6 +119,7 @@ async def maintenance_loop():
             for feed in GTFS_STATIC:
                 await asyncio.to_thread(maybe_reload, feed, True)  # recarga diaria forzada
             await asyncio.to_thread(run_geo)  # reclasificar tras recarga
+            await asyncio.to_thread(refresh_lines, engine)
         except Exception:
             log.exception("maintenance failed")
 
@@ -148,6 +150,25 @@ async def main():
         await asyncio.to_thread(_backfill_flags)
     except Exception:
         log.exception("trip_flags backfill failed")
+    # spans de viaje (backfill si el estático se cargó antes de v0.3.4)
+    def _backfill_spans():
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            for feed in GTFS_STATIC:
+                if not conn.execute(text(
+                        "SELECT 1 FROM trip_span WHERE feed=:f LIMIT 1"),
+                        {"f": feed}).first():
+                    log.info("trip_span %s: %d", feed,
+                             compute_trip_spans(conn, feed))
+    try:
+        await asyncio.to_thread(_backfill_spans)
+    except Exception:
+        log.exception("trip_span backfill failed")
+    # identidad de líneas: núcleo verificable por route_id
+    try:
+        log.info("line_route: %s", await asyncio.to_thread(refresh_lines, engine))
+    except Exception:
+        log.exception("line_route failed")
     # conciliación territorial (catálogos oficiales Renfe)
     try:
         st = await asyncio.to_thread(run_geo)

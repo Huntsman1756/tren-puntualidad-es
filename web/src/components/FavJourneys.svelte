@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { PUBLIC_API } from '../lib/api';
   import { fmtTime, fmtDelay, fmtDuration } from '../lib/format';
+  import LineBadge from './LineBadge.svelte';
   import {
     favJourneys, removeJourney, moveJourney, exportJSON, importJSON,
   } from '../lib/favs';
@@ -9,6 +10,7 @@
   let journeys = [];
   let next = {};          // id -> [journey items]
   let err = {};
+  let alerts = {};        // id -> avisos relevantes (sin los de otras estaciones)
   let importMsg = '';
 
   onMount(async () => {
@@ -18,8 +20,17 @@
       if (j.semidirect) p.set('semidirect', '1');
       try {
         const r = await fetch(`${PUBLIC_API}/api/v1/journeys?${p}`);
+        if (!r.ok) throw new Error(String(r.status));
         next = { ...next, [j.id]: (await r.json()).slice(0, 2) };
       } catch { err = { ...err, [j.id]: true }; }
+      try {
+        const q = new URLSearchParams({ origen: j.from.key, destino: j.to.key });
+        const r = await fetch(`${PUBLIC_API}/api/v1/incidencias?${q}`);
+        if (r.ok) {
+          const d = await r.json();
+          alerts = { ...alerts, [j.id]: d.items.filter((a) => a.relevance !== 'line_other_station') };
+        }
+      } catch { /* los avisos son complementarios */ }
     }));
   });
 
@@ -86,15 +97,20 @@
               {#if j.semidirect}<span class="chip">semidirectos</span>{/if}
             </span>
           </a>
+          {#if alerts[j.id]?.length}
+            <a class="jal" href={link(j)}>⚠ {alerts[j.id].length} aviso{alerts[j.id].length === 1 ? '' : 's'}:
+              {(alerts[j.id][0].description || alerts[j.id][0].header || '').slice(0, 90)}…</a>
+          {/if}
           <div class="jnext">
             {#if err[j.id]}
-              <span class="badge nodata">sin conexión</span>
+              <span class="badge nodata">error de consulta</span>
             {:else if next[j.id]?.length}
               {#each next[j.id] as it}
                 {@const d = fmtDelay(it.delay_sec)}
                 <a class="nt" href={link(j)}>
                   <strong>{fmtTime(it.dep_scheduled)}</strong>
-                  <span class="muted">{it.line || it.train_number}</span>
+                  <LineBadge line={it.line_info} fallback={it.line || it.train_number}
+                             showNucleo={false} link={false} />
                   <span class="muted">{fmtDuration(it.dep_scheduled, it.arr_scheduled)}</span>
                   <span class="badge {it.realtime ? d.cls : 'nodata'}">
                     {it.realtime ? d.text : 'prog.'}</span>
@@ -149,6 +165,7 @@
   .chip { font-size: .68rem; color: var(--muted); border: 1px solid var(--border);
           border-radius: 999px; padding: .05rem .45rem; }
   .jnext { padding: 0 .8rem; }
+  .jal { display: block; margin: 0 .8rem .3rem; font-size: .78rem; color: var(--warn); }
   .nt { display: flex; gap: .7rem; align-items: baseline; padding: .3rem 0;
         border-top: 1px solid var(--border); color: var(--text); font-size: .88rem; }
   .nt:first-child { border-top: 0; }

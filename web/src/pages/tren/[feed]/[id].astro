@@ -1,46 +1,73 @@
 ---
 import Base from '../../../layouts/Base.astro';
+import LineBadge from '../../../components/LineBadge.svelte';
 import { api } from '../../../lib/api';
 import { fmtDelay, fmtTime, FEED_NAME } from '../../../lib/format';
+import { madridToday, relDay } from '../../../lib/dates';
 
-const { feed, id } = Astro.params;
-let data;
-try { data = await api.train(feed, decodeURIComponent(id)); }
-catch { return Astro.redirect('/'); }
+const { feed, id } = Astro.params as { feed: string; id: string };
+const date = Astro.url.searchParams.get('date') || '';
+const time = Astro.url.searchParams.get('time') || '';
+const today = madridToday();
+let data: any;
+try { data = await api.train(feed, decodeURIComponent(id), date || undefined); }
+catch (e: any) {
+  if (e?.status === 404) return new Response(null, { status: 404, statusText: 'Not found' });
+  if (e?.status === 400) return Astro.redirect(`/tren/${feed}/${id}`);
+  throw e;
+}
 
-const { trip, rt, vehicle, fleet, stops, flags } = data;
+const { trip, rt, vehicle, fleet, stops, flags, line_info } = data;
+const day = data.service_date;
 const title = trip.train_number ? `Tren ${trip.train_number}` : `Viaje ${trip.trip_id}`;
 const effDelay = fleet?.delay_min != null ? fleet.delay_min * 60 : rt?.delay;
+const stq = new URLSearchParams();
+if (day !== today) stq.set('date', day);
+if (time) stq.set('time', time);
+const stqs = stq.toString() ? `?${stq}` : '';
 ---
-<Base title={`${title} — Puntualidad Renfe`}>
-  <p><a href="/">← Buscador</a></p>
+<Base title={`${title} · ${relDay(day, today)} — Trenes a tiempo`}
+      description={`Recorrido del ${title.toLowerCase()} ${line_info ? `(${line_info.label})` : ''} del ${relDay(day, today).toLowerCase()}: horario programado${data.scheduled_only ? '' : ', estimaciones y retrasos en tiempo real'}.`}>
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a>
+    {line_info?.url && <> › <a href={`/nucleos/${line_info.nucleo.slug}`}>{line_info.nucleo.name}</a> › <a href={line_info.url}>{line_info.code}</a></>}
+    › {title}</nav>
   <h1>{title}</h1>
-  <p class="muted">
-    {trip.line && <>Línea {trip.line} · </>}{FEED_NAME[feed] || feed}
-    {(vehicle?.platform || fleet?.platform) && <> · Vía {fleet?.platform || vehicle?.platform}</>}
-    {fleet?.next_platform && fleet.next_platform !== fleet.platform && <> · próxima vía {fleet.next_platform}</>}
-    {flags?.semidirect && <> · <span class="badge semi">semidirecto — omite {flags.skipped_stops} paradas</span></>}
+  <p class="muted meta">
+    {line_info && <LineBadge line={line_info} />}
+    <span>{FEED_NAME[feed] || feed}</span>
+    <span>· {relDay(day, today)}</span>
+    {(vehicle?.platform || fleet?.platform) && <span>· Vía {fleet?.platform || vehicle?.platform}</span>}
+    {fleet?.next_platform && fleet.next_platform !== fleet.platform && <span>· próxima vía {fleet.next_platform}</span>}
+    {flags?.semidirect && <span class="badge semi">semidirecto — omite {flags.skipped_stops} paradas</span>}
   </p>
 
+  {!data.runs_on_date && (
+    <div class="card alert" role="alert">Este tren <strong>no circula</strong> el {relDay(day, today).toLowerCase()}
+      según el horario oficial vigente. Se muestra su recorrido teórico como referencia.</div>
+  )}
+  {data.runs_on_date && data.scheduled_only && (
+    <p class="card tight muted">Horario programado del {relDay(day, today).toLowerCase()}.
+      No hay datos en tiempo real para fechas distintas de hoy.</p>
+  )}
   {rt?.sched_rel === 'CANCELED' && <div class="card alert"><strong>Tren suprimido.</strong></div>}
   {effDelay != null && effDelay > 120 && (
-    <div class="card alert">Retraso actual{fleet ? ' observado' : ' notificado'}: <strong>{Math.round(effDelay / 60)} min</strong></div>
+    <div class="card alert">Retraso actual{fleet?.delay_min != null ? ' observado' : ' notificado'}: <strong>{Math.round(effDelay / 60)} min</strong></div>
   )}
 
   <div class="card">
     <table class="board">
       <thead>
-        <tr><th>Estación</th><th>Programado</th><th>Estimado</th><th>Estado</th></tr>
+        <tr><th>Estación</th><th>Programado</th>{!data.scheduled_only && <th>Estimado</th>}<th>Estado</th></tr>
       </thead>
       <tbody>
-        {stops.map((s) => {
+        {stops.map((s: any) => {
           const d = fmtDelay(s.delay_sec);
           return (
             <tr>
-              <td><a href={`/estacion/${feed}:${s.stop_id}`}>{s.name}</a></td>
+              <td><a href={`/estacion/${feed}:${s.stop_id}${stqs}`}>{s.name}</a></td>
               <td>{fmtTime(s.arr_scheduled || s.dep_scheduled)}</td>
-              <td>{fmtTime(s.est_time)}</td>
-              <td><span class={`badge ${d.cls}`}>{s.delay_source === 'stop' ? `${d.text} · est.`
+              {!data.scheduled_only && <td>{fmtTime(s.est_time)}</td>}
+              <td><span class={`badge ${s.delay_source ? d.cls : 'nodata'}`}>{s.delay_source === 'stop' ? `${d.text} · est.`
                 : s.delay_source === 'observed' ? `${d.text} · obs.`
                 : s.delay_source === 'trip' ? `${d.text} · est.`
                 : 'prog.'}</span></td>
@@ -50,4 +77,17 @@ const effDelay = fleet?.delay_min != null ? fleet.delay_min * 60 : rt?.delay;
       </tbody>
     </table>
   </div>
+  {day === today && feed === 'cer' && (
+    <p class="muted small">Consultar este tren otro día:
+      {[1, 2, 3].map((n) => {
+        const d = new Date(Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10) + n))
+          .toISOString().slice(0, 10);
+        return <a class="dl" href={`/tren/${feed}/${id}?date=${d}`}>{relDay(d, today)}</a>;
+      })}</p>
+  )}
 </Base>
+<style>
+  .meta { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+  .small { font-size: .8rem; }
+  .dl { margin-left: .5rem; }
+</style>

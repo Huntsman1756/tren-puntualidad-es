@@ -1,0 +1,82 @@
+---
+import Base from '../../layouts/Base.astro';
+import IncidentCard from '../../components/IncidentCard.svelte';
+import SourceStatus from '../../components/SourceStatus.svelte';
+import { api } from '../../lib/api';
+import { fmtDelay } from '../../lib/format';
+
+const slug = Astro.params.slug || '';
+let n: any = null, agg: any = null, inc: any = null;
+try {
+  n = await api.nucleo(slug);
+} catch (e: any) {
+  if (e?.status === 404) return new Response(null, { status: 404, statusText: 'Not found' });
+  throw e;
+}
+[agg, inc] = await Promise.all([
+  api.delaysByLine({ nucleo: slug }).catch(() => null),
+  api.incidencias({ nucleo: slug }).catch(() => null),
+]);
+const live = new Map((agg?.items || []).map((i: any) => [i.line.slug, i]));
+const lineAlerts = (inc?.items || []).filter((a: any) => a.relevance === 'line');
+---
+<Base title={`${n.brand} ${n.name}: líneas, incidencias y retrasos — Trenes a tiempo`}
+      description={`Líneas del núcleo de ${n.brand} ${n.name}, avisos oficiales y retrasos en vivo.`}>
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › <a href="/nucleos">Núcleos</a> › {n.name}</nav>
+  <h1>{n.brand} {n.name}</h1>
+  <p class="muted">{n.operator} · {n.lines.length} líneas · {n.stations} estaciones con servicio en el horario vigente</p>
+
+  <section class="card">
+    <h2>Líneas</h2>
+    <table class="board">
+      <thead><tr><th>Línea</th><th>Ahora</th><th class="hide-sm">Cobertura RT</th></tr></thead>
+      <tbody>
+        {n.lines.map((l: any) => {
+          const a: any = live.get(l.slug);
+          const d = fmtDelay(a?.max_delay_sec);
+          return (
+            <tr>
+              <td>
+                <a class="lc" href={l.url} style={l.color && l.color !== 'FFFFFF' ? `--lc:#${l.color}` : ''}>
+                  <span class="code">{l.code}</span></a>
+                {l.variants.filter((v: any) => v.slug !== l.slug).map((v: any) =>
+                  <a class="var" href={v.url}>{v.code}</a>)}
+                {l.bus_only && <span class="muted small">solo bus</span>}
+              </td>
+              <td>
+                {a ? (a.monitored > 0
+                  ? <span>{a.delayed} con retraso ≥{Math.round((agg.min_delay) / 60)} min de {a.monitored} con dato
+                      {a.max_delay_sec != null && a.max_delay_sec > 120 &&
+                        <> · máx <span class={`badge ${d.cls}`}>{d.text}</span></>}</span>
+                  : <span class="muted">sin trenes con dato RT</span>)
+                  : <span class="muted">—</span>}
+              </td>
+              <td class="hide-sm">{a?.coverage_pct != null ? `${a.coverage_pct}% (${a.monitored}/${a.scheduled_now})` : '—'}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+    <p class="muted small">Foto en vivo del retraso informado por Renfe, no puntualidad
+      histórica. Cobertura = trenes con dato en tiempo real / trenes que según el horario
+      circulan ahora. <a href={`/retrasos?nucleo=${slug}`}>Ver trenes uno a uno</a></p>
+  </section>
+
+  <section class="card">
+    <h2>Incidencias <a class="small" href={`/incidencias?nucleo=${slug}`}>ver todas</a></h2>
+    {inc && <SourceStatus source={inc.source} count={inc.total} />}
+    {lineAlerts.slice(0, 5).map((a: any) => <IncidentCard a={a} compact />)}
+    {inc && inc.total > lineAlerts.slice(0, 5).length &&
+      <p class="small"><a href={`/incidencias?nucleo=${slug}`}>
+        {inc.total - Math.min(5, lineAlerts.length)} avisos más (estaciones, accesibilidad…)</a></p>}
+  </section>
+</Base>
+<style>
+  h2 { font-size: 1rem; margin: 0 0 .5rem; display: flex; gap: .6rem; align-items: baseline; }
+  .lc { display: inline-block; }
+  .code { display: inline-block; background: var(--lc, var(--card2)); color: #fff; font-weight: 700;
+          border-radius: 6px; padding: .12rem .45rem; min-width: 2.3rem; text-align: center;
+          text-shadow: 0 0 2px rgba(0,0,0,.6); }
+  .var { font-size: .78rem; margin-left: .35rem; }
+  .small { font-size: .78rem; }
+</style>

@@ -18,6 +18,10 @@ import Base from '../layouts/Base.astro';
           umbral, días y franja). <strong>No hay cuentas, correos ni
           teléfonos</strong>. El endpoint es opaco y no identifica tu
           identidad, aunque sí tu navegador concreto.</li>
+      <li>Cada navegador puede tener <strong>varios avisos independientes</strong>.
+          Para gestionarlos, tu navegador guarda una clave aleatoria que solo él
+          conoce; el servidor solo almacena su huella (SHA-256). Sin esa clave
+          nadie puede ver, editar ni borrar tus avisos.</li>
     </ul>
   </div>
 
@@ -29,9 +33,10 @@ import Base from '../layouts/Base.astro';
           <strong>según datos en tiempo real</strong> — nunca por horario
           programado sin confirmar.</li>
       <li>Hay deduplicación por tren y día y un mínimo de 10 minutos entre
-          avisos por suscripción.</li>
-      <li>Darte de baja es inmediato desde el mismo botón: se borra la fila
-          del servidor y se cancela la suscripción del navegador. Los
+          avisos de un mismo aviso configurado; cada aviso funciona por separado.</li>
+      <li>Borrar un aviso es inmediato y no afecta a los demás. Al borrar el
+          último (o con «Borrar todos» en <a href="/favoritos#avisos">Favoritos</a>)
+          se elimina el navegador del servidor y se cancela la suscripción. Los
           endpoints caducados se borran solos cuando el push falla.</li>
     </ul>
   </div>

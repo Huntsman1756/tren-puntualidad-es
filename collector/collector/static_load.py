@@ -18,6 +18,7 @@ from collector.gtfsutil import (
     hms_to_secs,
     read_gtfs_csv,
 )
+from collector.lines import compute_line_routes, compute_trip_spans
 
 log = logging.getLogger("collector.static")
 
@@ -103,6 +104,9 @@ def load_feed(feed: str, path: str, conn):
     conn.execute(text("ANALYZE stop_times"))
     conn.execute(text("ANALYZE trips"))
     counts["trip_flags"] = compute_trip_flags(conn, feed)
+    counts["trip_span"] = compute_trip_spans(conn, feed)
+    # identidad de líneas con el último contraste oficial guardado
+    counts["line_route"] = compute_line_routes(conn)
     return counts
 
 

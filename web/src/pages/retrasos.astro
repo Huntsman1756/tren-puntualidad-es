@@ -1,41 +1,130 @@
 ---
 import Base from '../layouts/Base.astro';
+import LineBadge from '../components/LineBadge.svelte';
 import { api } from '../lib/api';
-import { fmtDelay, fmtTime } from '../lib/format';
+import { fmtDelay, fmtTime, ageText } from '../lib/format';
 
-let items = [];
-try { items = await api.ranking(100); } catch {}
+const sp = Astro.url.searchParams;
+const vista = sp.get('vista') === 'lineas' ? 'lineas' : 'trenes';
+const nucleo = sp.get('nucleo') || '';
+const linea = nucleo ? (sp.get('linea') || '') : '';
+let items: any[] = [];
+let agg: any = null;
+let nucleos: any[] = [];
+let error = false;
+try {
+  nucleos = await api.nucleos().catch(() => []);
+  if (vista === 'trenes') {
+    items = await api.ranking(100, { nucleo: nucleo || undefined, linea: linea || undefined });
+  } else {
+    agg = await api.delaysByLine({ nucleo: nucleo || undefined });
+  }
+} catch { error = true; }
+const nuc = nucleos.find((n: any) => n.slug === nucleo);
+const qs = (o: Record<string, string>) => {
+  const p = new URLSearchParams(Object.entries({ vista, nucleo, linea, ...o }).filter(([, v]) => v));
+  return `/retrasos?${p}`;
+};
+const where = nuc ? (linea ? ` · ${linea.toUpperCase()} ${nuc.name}` : ` · ${nuc.brand} ${nuc.name}`) : '';
 ---
-<Base title="Retrasos en tiempo real — Puntualidad Renfe">
-  <p><a href="/">← Buscador</a></p>
-  <h1>Retrasos en tiempo real</h1>
-  <p class="muted">Trenes en circulación o próximos con retraso notificado por Renfe.
-    La «próxima parada» es la que informa el feed RT, no necesariamente la
-    posición física actual del tren.</p>
+<Base title={`Retrasos en vivo${where} — Trenes a tiempo`}
+      description="Trenes con retraso informado ahora mismo y resumen en vivo por línea y núcleo, con la cobertura de datos de cada línea.">
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › Retrasos</nav>
+  <h1>Retrasos en vivo{where}</h1>
+  <p class="muted">Foto del momento con el retraso <strong>informado</strong> por Renfe. No es
+    puntualidad histórica. La «próxima parada» es la que anuncia el feed, no necesariamente la
+    posición física del tren.</p>
 
-  <div class="card">
-    {items.length === 0
-      ? <p class="muted">No hay retrasos activos notificados ahora mismo.</p>
-      : (
+  <div class="tabs" role="tablist">
+    <a role="tab" aria-selected={vista === 'trenes'} class:list={[{ on: vista === 'trenes' }]}
+       href={qs({ vista: 'trenes' })}>Trenes uno a uno</a>
+    <a role="tab" aria-selected={vista === 'lineas'} class:list={[{ on: vista === 'lineas' }]}
+       href={qs({ vista: 'lineas', linea: '' })}>Resumen por línea</a>
+  </div>
+
+  <form class="filters card tight" method="get" action="/retrasos">
+    <input type="hidden" name="vista" value={vista} />
+    <label>Núcleo
+      <select name="nucleo">
+        <option value="">Todos (incluye AV/LD)</option>
+        {nucleos.map((n: any) => <option value={n.slug} selected={n.slug === nucleo}>{n.name}</option>)}
+      </select>
+    </label>
+    {nuc && vista === 'trenes' && (
+      <label>Línea
+        <select name="linea">
+          <option value="">Todas</option>
+          {nuc.lines.map((l: any) => <option value={l.slug} selected={l.slug === linea}>{l.code}</option>)}
+        </select>
+      </label>
+    )}
+    <button type="submit">Aplicar</button>
+  </form>
+
+  {error && <div class="card alert" role="alert">No se han podido cargar los retrasos. Inténtalo de nuevo en unos segundos.</div>}
+
+  {vista === 'trenes' && !error && (
+    <div class="card">
+      {items.length === 0
+        ? <p class="muted">No hay trenes con retraso ≥1 min informado ahora mismo{where ? ' en este ámbito' : ''}.
+            Renfe no publica dato en tiempo real de todos los trenes: consulta la
+            <a href={qs({ vista: 'lineas' })}>cobertura por línea</a>.</p>
+        : (
+        <table class="board">
+          <thead><tr><th>Línea</th><th>Tren</th><th class="hide-sm">Destino</th><th>Próxima parada</th><th>Retraso</th></tr></thead>
+          <tbody>
+            {items.map((r: any) => {
+              const d = fmtDelay(r.delay);
+              return (
+                <tr>
+                  <td><LineBadge line={r.line_info} fallback={r.line} /></td>
+                  <td><a href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>{r.train_number || r.trip_id}</a></td>
+                  <td class="hide-sm">{r.destination || '—'}</td>
+                  <td>{r.next_stop_name || '—'} <span class="muted">{fmtTime(r.next_stop_time)}</span></td>
+                  <td><span class={`badge ${d.cls}`}>{d.text}{r.delay_source === 'observed' ? ' · obs.' : ' · est.'}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )}
+
+  {vista === 'lineas' && agg && (
+    <div class="card">
       <table class="board">
-        <thead>
-          <tr><th>Línea</th><th>Tren</th><th>Destino</th><th>Próxima parada</th><th>Retraso</th></tr>
-        </thead>
+        <thead><tr><th>Línea</th><th>Con retraso ≥{Math.round(agg.min_delay / 60)} min</th><th>Retraso máx.</th><th>Cobertura</th></tr></thead>
         <tbody>
-          {items.map((r) => {
-            const d = fmtDelay(r.delay);
+          {agg.items.filter((i: any) => i.scheduled_now > 0 || i.monitored > 0).map((i: any) => {
+            const d = fmtDelay(i.max_delay_sec);
             return (
               <tr>
-                <td>{r.line ? <span class="line-tag">{r.line}</span> : '—'}</td>
-                <td><a href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>{r.train_number || r.trip_id}</a></td>
-                <td class="hide-sm">{r.destination || '—'}</td>
-                <td>{r.next_stop_name || '—'} <span class="muted">{r.next_stop_time ? fmtTime(r.next_stop_time) : ''}</span></td>
-                <td><span class={`badge ${d.cls}`}>{d.text}</span></td>
+                <td><a href={i.line.url}><strong>{i.line.code}</strong></a> <span class="muted small">{i.nucleo.name}</span></td>
+                <td>{i.monitored ? `${i.delayed} de ${i.monitored}` : <span class="muted">sin dato</span>}</td>
+                <td>{i.max_delay_sec != null ? <span class={`badge ${d.cls}`}>{d.text}</span> : '—'}</td>
+                <td title={`${i.monitored} trenes con dato RT / ${i.scheduled_now} que deberían circular`}>
+                  {i.coverage_pct != null ? `${i.coverage_pct}%` : '—'}
+                  <span class="muted small"> ({i.monitored}/{i.scheduled_now})</span></td>
               </tr>
             );
           })}
         </tbody>
       </table>
-    )}
-  </div>
+      <p class="muted small">{agg.note} Actualizado {ageText(agg.generated_at)}.
+        Solo Cercanías/Rodalies (AV/LD no se organiza por núcleos).</p>
+    </div>
+  )}
 </Base>
+<style>
+  .tabs { display: flex; gap: .4rem; margin: .4rem 0; }
+  .tabs a { border: 1px solid var(--border); border-radius: 8px; padding: .45rem .9rem;
+            color: var(--muted); font-size: .9rem; }
+  .tabs a.on { background: var(--accent); color: var(--accent-fg); border-color: transparent; font-weight: 600; }
+  .filters { display: flex; gap: .6rem; flex-wrap: wrap; align-items: end; font-size: .85rem; }
+  .filters label { display: flex; flex-direction: column; gap: .2rem; color: var(--muted); }
+  .filters select { width: auto; }
+  .filters button { padding: .5rem .9rem; border-radius: 8px; border: 0; background: var(--accent);
+                    color: var(--accent-fg); font-weight: 600; cursor: pointer; min-height: 40px; }
+  .small { font-size: .76rem; }
+</style>

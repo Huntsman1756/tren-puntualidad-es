@@ -1,5 +1,73 @@
 # Changelog
 
+## [0.3.4] — 2026-10-09
+
+### Identidad inequívoca de líneas
+- Nueva tabla `line_route`: cada `route_id` GTFS → operador, núcleo, feed,
+  código comercial (grafía oficial, C4A ≡ C4a) y familia (C4a/C4b → C4).
+- Núcleo desde el prefijo oficial del `route_id` **contrastado** con el
+  núcleo que el visor de Renfe asigna a las paradas (`station_nucleo`);
+  estados `verified | prefix_only | conflict | unmapped`. Nunca por
+  provincia ni por short_name. Auditoría: `/api/v1/lineas-audit`.
+- `line_info` (código + núcleo + URL) en tableros, trayectos, ficha de tren,
+  nº de tren, ranking y push.
+- Páginas `/nucleos`, `/nucleos/{n}`, `/lineas`, `/lineas/{n}/{l}` (familia o
+  variante): estaciones por variante, trenes en circulación, avisos e
+  identificadores GTFS.
+- Ranking en vivo filtrable por núcleo y línea (`/delays/ranking`) y nuevo
+  agregado por línea (`/delays/lines`): trenes con dato RT, con retraso
+  informado ≥ umbral, retraso máximo y cobertura (con dato / programados
+  circulando ahora). Etiquetado como foto en vivo, no puntualidad histórica.
+- `flota.json`: retrasos implausibles (p. ej. −1438 min) se ignoran.
+
+### Incidencias oficiales
+- `/incidencias` (web y API) con filtros por núcleo, línea, estación, tipo y
+  periodo (actuales, vigentes, próximas, retiradas 7 días).
+- Normalización GTFS-RT completa: `activePeriod`, `informedEntity`
+  (agency/route/route_type/trip/stop), traducciones, url, cause, effect y
+  severityLevel solo si existen.
+- Alcance oficial respetado: estación ≠ línea; avisos de línea que citan una
+  estación se anotan (inferido del texto) para no difundirlos a toda la línea.
+- Clasificación explícita con motivo: accesibilidad, obras programadas,
+  servicio interrumpido, servicio alternativo, otras.
+- Salud de la fuente separada del contenido (`alerts_fetch_ok/err`): fuente
+  sana sin avisos ≠ caída ≠ desconocida; AV/LD sin feed de avisos.
+- Histórico `alerts_seen` (primera/última vez visto, retención 90 días).
+- Avisos en portada (núcleos y trayectos guardados), línea, estación y trayecto.
+
+### Planificador y fechas
+- Fecha por defecto en Europe/Madrid (antes `toISOString`, UTC).
+- Atajos Hoy / Mañana / Fin de semana / Elegir fecha; cambiar de día no
+  arrastra la hora actual (otro día sin hora = día completo).
+- Fecha y hora se conservan entre portada, estación, trayecto, línea y tren;
+  la búsqueda de estación desde portada respeta fecha y hora.
+- Ficha de tren por instancia: `/tren/{feed}/{id}?date=` muestra el horario
+  de ese día, solo programado si no es hoy, e indica si no circula.
+- `/journeys/plan` con estados: ok, sin directos en la franja, fuera de
+  cobertura, requiere transbordo, transbordo entre redes; errores de consulta
+  diferenciados en la web. Cobertura válida por feed (`/meta/coverage`).
+
+### Web Push: múltiples reglas
+- `push_devices` + `push_rules`: un navegador, varias reglas independientes
+  (CRUD en `/api/v1/push/rules`). Credencial de posesión: token aleatorio
+  entregado al registrar, solo se guarda su SHA-256.
+- Borrar una regla no afecta a las demás; el navegador se da de baja al
+  borrar la última. Migración automática de `push_subs` (reclamable una vez
+  con el endpoint). `/push/subscribe` antiguo añade regla, nunca sobrescribe.
+- Dedup y frecuencia por regla; `tag` por regla en la notificación.
+
+### Navegación y otros
+- Menú principal (Horarios, Estaciones, Líneas, Núcleos, Incidencias,
+  Retrasos, Favoritos) con menú móvil, migas, enlace de salto y estados
+  vacíos/errores explícitos. Nuevas `/horarios` y `/favoritos` (incl. gestión
+  de avisos).
+- Limitador de la API: clave por IP real (último X-Forwarded-For) y sin
+  límite para el SSR interno — antes todo el tráfico compartía una IP.
+- `geo/*`: agrupación de estaciones O(n) con caché (sitemap 44 s → <1 s).
+- Tests: 137 en verde + 7 que requieren API levantada (líneas homónimas, alertas por routeId/stopId, fechas futuras,
+  medianoche, transbordos no soportados, push multi-regla E2E) +
+  Playwright escritorio/móvil (`e2e/v034.mjs`).
+
 ## [0.3.3] — 2026-10-08
 
 ### Modelo histórico corregido (metodología honesta)

@@ -1,0 +1,55 @@
+---
+import Base from '../../layouts/Base.astro';
+import { api } from '../../lib/api';
+
+let nucleos: any[] = [];
+let error = false;
+try { nucleos = await api.nucleos(); } catch { error = true; }
+const lineas = Astro.url.pathname.startsWith('/lineas');
+---
+<Base title={`${lineas ? 'Líneas' : 'Núcleos'} de Cercanías y Rodalies — Trenes a tiempo`}
+      description="Todos los núcleos de Cercanías y Rodalies de Renfe con sus líneas: C1 de Madrid no es la C1 de Asturias.">
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › {lineas ? 'Líneas' : 'Núcleos'}</nav>
+  <h1>{lineas ? 'Líneas' : 'Núcleos'} de Cercanías y Rodalies</h1>
+  <p class="muted">Cada línea se identifica por su núcleo: la C1 de Madrid y la C1 de
+    Asturias son líneas distintas. La correspondencia se obtiene del identificador oficial
+    de ruta GTFS y se contrasta con el núcleo que el visor de Renfe asigna a cada estación.</p>
+  {error && <div class="card alert" role="alert">No se han podido cargar los núcleos.</div>}
+  <div class="grid">
+    {nucleos.map((n: any) => (
+      <section class="card nuc">
+        <h2><a href={n.url}>{n.brand} {n.name}</a>
+          {n.alerts > 0 && <a class="al" href={`/incidencias?nucleo=${n.slug}`}
+             title="Avisos oficiales publicados">⚠ {n.alerts}</a>}</h2>
+        <div class="lines">
+          {n.lines.map((l: any) => (
+            <a class="ln" href={l.url} title={`${l.code} · ${n.name}`}
+               style={l.color && l.color !== 'FFFFFF' ? `--lc:#${l.color}` : ''}>
+              <span class="code">{l.code}</span>
+              {l.variants.length > 1 && <span class="var">{l.variants.filter((v: any) => v.slug !== l.slug).map((v: any) => v.code).join(' ')}</span>}
+              {l.bus_only && <span class="var">bus</span>}
+            </a>
+          ))}
+        </div>
+      </section>
+    ))}
+  </div>
+  <p class="muted small">Auditoría de la correspondencia route_id → núcleo → línea:
+    <a href="/api/v1/lineas-audit">/api/v1/lineas-audit</a>.</p>
+</Base>
+<style>
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .8rem; }
+  .nuc { margin: 0; }
+  .nuc h2 { font-size: 1rem; margin: 0 0 .6rem; display: flex; justify-content: space-between; }
+  .al { font-size: .8rem; color: var(--warn); }
+  .lines { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .ln { display: inline-flex; align-items: center; gap: .3rem; color: var(--text);
+        border: 1px solid var(--border); border-radius: 8px; padding: .2rem .45rem .2rem .2rem;
+        min-height: 36px; }
+  .ln:hover { border-color: var(--accent); }
+  .code { background: var(--lc, var(--card2)); color: #fff; font-weight: 700; border-radius: 6px;
+          padding: .12rem .4rem; font-size: .82rem; min-width: 2.2rem; text-align: center;
+          text-shadow: 0 0 2px rgba(0,0,0,.6); }
+  .var { font-size: .7rem; color: var(--muted); }
+  .small { font-size: .75rem; margin-top: 1.5rem; }
+</style>
