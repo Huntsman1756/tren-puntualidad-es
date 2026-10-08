@@ -4,8 +4,13 @@ const {
   description = 'Salidas, llegadas y retrasos de trenes Renfe por estación y trayecto, con datos oficiales en tiempo real.',
   canonical,
 } = Astro.props;
-const site = Astro.url.origin;
-const canonicalUrl = canonical ? new URL(canonical, site).href : Astro.url.href;
+const fwdHost = Astro.request.headers.get('x-forwarded-host')
+  || Astro.request.headers.get('host') || new URL(Astro.url).host;
+const fwdProto = Astro.request.headers.get('x-forwarded-proto') || 'https';
+const siteOrigin = (typeof process !== 'undefined' && process.env?.PUBLIC_SITE_URL)
+  || `${fwdProto}://${fwdHost}`;
+const canonicalUrl = canonical ? new URL(canonical, siteOrigin).href
+  : `${siteOrigin}${Astro.url.pathname}`;
 ---
 <!doctype html>
 <html lang="es">
