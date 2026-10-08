@@ -71,7 +71,7 @@ def next_trains_journey(conn, from_key: str, to_key: str, horizon_min: int) -> l
             LEFT JOIN routes r ON r.feed=t.feed AND r.route_id=t.route_id
             LEFT JOIN rt_trip rt ON rt.feed=t.feed AND rt.trip_id=t.trip_id
             LEFT JOIN rt_stop_update s1 ON s1.feed=t.feed AND s1.trip_id=t.trip_id
-                 AND s1.stop_seq=so.seq
+                 AND s1.stop_id=so.stop_id
             LEFT JOIN rt_fleet fl ON fl.feed=t.feed AND fl.trip_id=t.trip_id
             WHERE so.feed=:ff AND so.stop_id=:fs
               AND so.dep BETWEEN :lo AND :hi
@@ -108,7 +108,7 @@ def next_trains_station(conn, station_key: str, horizon_min: int) -> list:
                  AND sd.day=:day
             LEFT JOIN routes r ON r.feed=t.feed AND r.route_id=t.route_id
             LEFT JOIN rt_stop_update s ON s.feed=t.feed AND s.trip_id=t.trip_id
-                 AND s.stop_seq=st.seq
+                 AND s.stop_id=st.stop_id
             LEFT JOIN rt_trip rt ON rt.feed=t.feed AND rt.trip_id=t.trip_id
             LEFT JOIN rt_fleet fl ON fl.feed=t.feed AND fl.trip_id=t.trip_id
             WHERE st.feed=:feed AND st.stop_id=:stop AND st.dep IS NOT NULL
