@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0] — 2026-10-08
+
+- PWA: manifest + iconos + service worker (push, click, fetch passthrough).
+- Web Push VAPID: suscripciones anónimas por estación o trayecto con
+  umbral de retraso, franja horaria y días. Sin cuentas ni correo.
+- Deduplicación por tren/día/escalón de retraso; límite de frecuencia;
+  baja inmediata y borrado de endpoints caducados.
+- Nunca se notifica sobre datos no confirmados por tiempo real.
+- /privacidad con política real.
+
+
 ## [0.2.0] — 2026-10-08
 
 ### API
