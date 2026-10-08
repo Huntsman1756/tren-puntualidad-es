@@ -30,6 +30,7 @@ services:
       - coolify
     labels:
       traefik.enable: "true"
+      traefik.docker.network: "coolify"
       traefik.http.routers.trenes-api.rule: "Host(`${DOMAIN}`) && PathPrefix(`/api`)"
       traefik.http.routers.trenes-api.entrypoints: "https"
       traefik.http.routers.trenes-api.tls.certresolver: "letsencrypt"
@@ -49,6 +50,7 @@ services:
       - coolify
     labels:
       traefik.enable: "true"
+      traefik.docker.network: "coolify"
       # HTTPS
       traefik.http.routers.trenes-web.rule: "Host(`${DOMAIN}`)"
       traefik.http.routers.trenes-web.entrypoints: "https"
