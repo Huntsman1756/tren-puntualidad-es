@@ -1,0 +1,30 @@
+import os
+
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL", "postgresql+psycopg://renfe:renfe@localhost:5432/renfe"
+)
+
+GTFS_STATIC = {
+    "cer": "https://ssl.renfe.com/ftransit/Fichero_CER_FOMENTO/fomento_transit.zip",
+    "ld": "https://ssl.renfe.com/gtransit/Fichero_AV_LD/google_transit.zip",
+}
+
+RT_TRIP_UPDATES = {
+    "cer": "https://gtfsrt.renfe.com/trip_updates.json",
+    "ld": "https://gtfsrt.renfe.com/trip_updates_LD.json",
+}
+RT_VEHICLE_POSITIONS = {
+    "cer": "https://gtfsrt.renfe.com/vehicle_positions.json",
+    "ld": "https://gtfsrt.renfe.com/vehicle_positions_LD.json",
+}
+RT_ALERTS = {
+    "cer": "https://gtfsrt.renfe.com/alerts.json",
+    "ld": None,
+}
+
+POLL_TRIP_UPDATES = int(os.environ.get("POLL_TRIP_UPDATES", "25"))
+POLL_VEHICLE_POSITIONS = int(os.environ.get("POLL_VEHICLE_POSITIONS", "30"))
+POLL_ALERTS = int(os.environ.get("POLL_ALERTS", "60"))
+POLL_STATIC = int(os.environ.get("POLL_STATIC", "3600"))
+
+TZ = "Europe/Madrid"

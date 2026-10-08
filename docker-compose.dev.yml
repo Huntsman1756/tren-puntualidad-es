@@ -1,0 +1,7 @@
+# Solo para desarrollo local: expone Postgres en el host (puerto 5433
+# para no colisionar con un posible Postgres local en 5432).
+# Uso: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+services:
+  db:
+    ports:
+      - "5433:5432"

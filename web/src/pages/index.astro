@@ -1,0 +1,53 @@
+---
+import Base from '../layouts/Base.astro';
+import SearchBox from '../components/SearchBox.svelte';
+import JourneySearch from '../components/JourneySearch.svelte';
+import { api } from '../lib/api';
+import { fmtDelay, fmtTime } from '../lib/format';
+
+let ranking = [];
+let status = null;
+try {
+  [ranking, status] = await Promise.all([api.ranking(8), api.status()]);
+} catch {}
+const maxAge = status?.feeds ? Math.max(
+  status.feeds.rt_trip_updates_cer?.age_sec ?? 9999,
+  status.feeds.rt_trip_updates_ld?.age_sec ?? 9999) : null;
+---
+<Base title="Puntualidad Renfe — tu tren, sin complicaciones">
+  <h1>Tu tren, sin complicaciones</h1>
+  <p class="muted">Consulta una estación, un trayecto o un tren. Datos oficiales de Renfe en tiempo real.</p>
+
+  <div class="card">
+    <SearchBox client:load autoFocus={true} />
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem;">Por trayecto</h2>
+    <JourneySearch client:load />
+  </div>
+
+  {maxAge !== null && maxAge > 180 && (
+    <div class="card alert">Los datos en tiempo real llevan {Math.round(maxAge / 60)} min sin actualizarse.</div>
+  )}
+
+  {ranking.length > 0 && (
+    <div class="card">
+      <h2 style="margin-top:0;font-size:1rem;">
+        Mayores retrasos ahora · <a href="/retrasos">ver todos</a>
+      </h2>
+      <table class="board">
+        <tbody>
+          {ranking.map((r) => (
+            <tr>
+              <td><span class="line-tag">{r.line || '—'}</span></td>
+              <td><a href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>{r.train_number || r.trip_id}</a></td>
+              <td class="hide-sm">{r.destination || '—'}</td>
+              <td><span class={`badge ${fmtDelay(r.delay).cls}`}>{fmtDelay(r.delay).text}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )}
+</Base>

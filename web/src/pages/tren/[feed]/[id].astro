@@ -1,0 +1,47 @@
+---
+import Base from '../../../layouts/Base.astro';
+import { api } from '../../../lib/api';
+import { fmtDelay, fmtTime, FEED_NAME } from '../../../lib/format';
+
+const { feed, id } = Astro.params;
+let data;
+try { data = await api.train(feed, decodeURIComponent(id)); }
+catch { return Astro.redirect('/'); }
+
+const { trip, rt, vehicle, stops } = data;
+const title = trip.train_number ? `Tren ${trip.train_number}` : `Viaje ${trip.trip_id}`;
+---
+<Base title={`${title} — Puntualidad Renfe`}>
+  <p><a href="/">← Buscador</a></p>
+  <h1>{title}</h1>
+  <p class="muted">
+    {trip.line && <>Línea {trip.line} · </>}{FEED_NAME[feed] || feed}
+    {vehicle?.platform && <> · Vía {vehicle.platform}</>}
+  </p>
+
+  {rt?.sched_rel === 'CANCELED' && <div class="card alert"><strong>Tren suprimido.</strong></div>}
+  {rt?.delay != null && rt.delay > 120 && (
+    <div class="card alert">Retraso actual notificado: <strong>{Math.round(rt.delay / 60)} min</strong></div>
+  )}
+
+  <div class="card">
+    <table class="board">
+      <thead>
+        <tr><th>Estación</th><th>Programado</th><th>Estimado</th><th>Estado</th></tr>
+      </thead>
+      <tbody>
+        {stops.map((s) => {
+          const d = fmtDelay(s.delay_sec);
+          return (
+            <tr>
+              <td><a href={`/estacion/${feed}/${s.stop_id}`}>{s.name}</a></td>
+              <td>{fmtTime(s.arr_scheduled || s.dep_scheduled)}</td>
+              <td>{fmtTime(s.est_time)}</td>
+              <td><span class={`badge ${d.cls}`}>{s.realtime ? d.text : 'prog.'}</span></td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+</Base>

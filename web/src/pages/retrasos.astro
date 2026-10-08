@@ -1,0 +1,39 @@
+---
+import Base from '../layouts/Base.astro';
+import { api } from '../lib/api';
+import { fmtDelay, fmtTime } from '../lib/format';
+
+let items = [];
+try { items = await api.ranking(100); } catch {}
+---
+<Base title="Retrasos en tiempo real — Puntualidad Renfe">
+  <p><a href="/">← Buscador</a></p>
+  <h1>Retrasos en tiempo real</h1>
+  <p class="muted">Trenes en circulación o próximos con retraso notificado por Renfe.</p>
+
+  <div class="card">
+    {items.length === 0
+      ? <p class="muted">No hay retrasos activos notificados ahora mismo.</p>
+      : (
+      <table class="board">
+        <thead>
+          <tr><th>Línea</th><th>Tren</th><th>Destino</th><th>Próxima parada</th><th>Retraso</th></tr>
+        </thead>
+        <tbody>
+          {items.map((r) => {
+            const d = fmtDelay(r.delay);
+            return (
+              <tr>
+                <td>{r.line ? <span class="line-tag">{r.line}</span> : '—'}</td>
+                <td><a href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>{r.train_number || r.trip_id}</a></td>
+                <td class="hide-sm">{r.destination || '—'}</td>
+                <td>{r.next_stop_name || '—'} <span class="muted">{r.next_stop_time ? fmtTime(r.next_stop_time) : ''}</span></td>
+                <td><span class={`badge ${d.cls}`}>{d.text}</span></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    )}
+  </div>
+</Base>

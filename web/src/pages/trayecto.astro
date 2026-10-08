@@ -1,0 +1,64 @@
+---
+import Base from '../layouts/Base.astro';
+import { api } from '../lib/api';
+import { fmtDelay, fmtTime } from '../lib/format';
+
+const from = Astro.url.searchParams.get('from');
+const to = Astro.url.searchParams.get('to');
+
+let items = [], error = null, fromName = '', toName = '';
+if (from && to) {
+  try {
+    const [fs, ts] = from.split(':');
+    const [ff, tf] = to.split(':');
+    [items, fromName, toName] = await Promise.all([
+      api.journeys(from, to),
+      api.station(fs, ts).then((s) => s.name).catch(() => ts),
+      api.station(ff, tf).then((s) => s.name).catch(() => tf),
+    ]).then(([j, a, b]) => [j, a, b]);
+  } catch (e) {
+    error = 'No se ha podido cargar el trayecto.';
+  }
+}
+---
+<Base title={`Trayecto ${fromName} → ${toName}`}>
+  <p><a href="/">← Buscador</a></p>
+  <h1>{fromName} → {toName}</h1>
+
+  {error && <div class="card alert">{error}</div>}
+  {!error && items.length === 0 && (
+    <div class="card muted">No hay trenes directos en las próximas 8 horas para este trayecto.</div>
+  )}
+
+  {items.length > 0 && (
+    <div class="card">
+      <table class="board">
+        <thead>
+          <tr><th>Salida</th><th>Llegada</th><th>Línea</th>
+              <th class="hide-sm">Tren</th><th>Estado</th></tr>
+        </thead>
+        <tbody>
+          {items.map((j) => {
+            const d = fmtDelay(j.delay_sec);
+            return (
+              <tr>
+                <td>
+                  <strong>{fmtTime(j.dep_scheduled)}</strong>
+                  {j.realtime && j.dep_estimated !== j.dep_scheduled && (
+                    <><br /><span class="muted">→ {fmtTime(j.dep_estimated)}</span></>
+                  )}
+                </td>
+                <td>{fmtTime(j.arr_estimated)}</td>
+                <td>{j.line ? <span class="line-tag">{j.line}</span> : '—'}</td>
+                <td class="hide-sm">
+                  <a href={`/tren/${j.feed}/${encodeURIComponent(j.trip_id)}`}>{j.train_number || j.trip_id}</a>
+                </td>
+                <td><span class={`badge ${d.cls}`}>{d.text}</span></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  )}
+</Base>
