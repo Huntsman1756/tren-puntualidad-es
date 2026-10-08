@@ -1,67 +1,95 @@
-# Puntualidad Renfe
+# Trenes a tiempo
 
-Web de puntualidad ferroviaria por **estación**, **trayecto** y **tren**, con datos oficiales en tiempo real de Renfe. Alternativa a tardenfe.com / retrasosrenfe.com: en lugar de un simple ranking de retrasos, el usuario puede responder «¿cuándo llega mi próximo tren?», «¿cuánto retraso lleva?» y «¿qué puntualidad tiene mi trayecto?».
+Buscador independiente de **puntualidad ferroviaria en España**: salidas y
+llegadas por estación, trayectos origen-destino, ficha de tren y ranking de
+retrasos, sobre datos oficiales de Renfe en tiempo real.
+
+La diferencia frente a webs de "ranking de retrasos": cualquier persona puede
+buscar **su estación** o **su trayecto** y obtener horarios programados,
+estimaciones y retrasos observados con la frescura de cada fuente visible.
 
 ## Arquitectura
 
 ```
-Renfe data.renfe.com
-  GTFS estático (cercanías + AV/LD/MD)  ──►  collector (Python) ──► PostgreSQL
-  GTFS-RT: trip_updates, vehicle_positions, alerts ──► sondeo 20-60 s
-                                            │
-PostgreSQL ──► api (FastAPI :8000) ──► web (Astro SSR + Svelte :4321) ──► Caddy :443
+data.renfe.com + tiempo-real.renfe.com
+  GTFS estático (CER + AV/LD/MD)          ─┐
+  GTFS-RT trip_updates / vehicle_positions ├─► collector (Python) ─► PostgreSQL
+  alerts.json / flota.json                ─┘                          │
+                                          api (FastAPI) ◄─────────────┘
+                                                │
+                                    web (Astro SSR + Svelte)
+                                                │
+                              Traefik (VPS) o Caddy (standalone) :443
 ```
 
-- **collector/**: descarga el GTFS estático (firma remota por `Last-Modified`/`ETag`, recarga diaria forzada) y sondea los feeds GTFS-RT. Guarda estado actual (`rt_trip`, `rt_stop_update`, `rt_vehicle`, `alerts`) y un histórico append-only (`observations`) solo cuando cambia el retraso/hora prevista.
-- **api/**: FastAPI. Endpoints:
-  - `GET /api/stations/search?q=` — buscador de estaciones
-  - `GET /api/stations/{feed}/{stop_id}/board?kind=departures|arrivals` — tablero con retrasos
-  - `GET /api/journeys?from=cer:xxxxx&to=cer:yyyyy` — trayecto origen→destino
-  - `GET /api/trains/{feed}/{trip_id}` — recorrido completo del tren
-  - `GET /api/delays/ranking`, `GET /api/alerts`, `GET /api/meta/status`
-- **web/**: Astro SSR (adaptador Node) + islas Svelte. Páginas indexables por estación y tren; el tablero se refresca solo cada 30 s.
+- **collector/** — ingesta: GTFS estático (COPY masivo, recarga diaria y por
+  firma `Last-Modified`), sondeo RT (~25 s CER / ~30 s LD), flota del visor
+  (~45 s, retraso **observado**), avisos, histórico deduplicado en
+  `observations`, retención 90 días, guarda de disco.
+- **api/** — FastAPI, API pública versionada `/api/v1`:
+  - `GET /api/v1/stations/search?q=` — autocompletado, sin acentos, agrupa la
+    misma estación física entre redes
+  - `GET /api/v1/stations/board?stops=cer:18000,ld:18000` — tablero combinado
+    salidas/llegadas
+  - `GET /api/v1/journeys?from=&to=` — trayectos directos (secuencia real de
+    paradas + calendario del día)
+  - `GET /api/v1/trains/{feed}/{trip_id}` — recorrido y estado del tren
+  - `GET /api/v1/trains/by-number/{n}` — instancias de hoy por nº comercial
+  - `GET /api/v1/delays/ranking`, `GET /api/v1/alerts`, `GET /api/v1/data/status`
+  - `/health/live`, `/health/ready`, OpenAPI en `/docs`
+- **web/** — Astro SSR + islas Svelte: buscador protagonista (favoritos e
+  historial local), página por estación con auto-refresh, trayecto, tren,
+  ranking, `/estado` (frescura de fuentes) y `/fuentes` (metodología).
+- **infra/compose/docker-compose.prod.yml** — despliegue sobre Traefik
+  (Coolify) con TLS automático, límites de memoria, backup diario pg_dump.
+  `docker-compose.yml` base + `docker-compose.dev.yml` (puerto pg local) +
+  perfil `standalone` con Caddy para despliegue sin Traefik.
 
-`feed` = `cer` (Cercanías/Rodalies nacional) o `ld` (Alta Velocidad, Larga y Media Distancia).
+`feed` = `cer` (Cercanías/Rodalies nacional) o `ld` (AV · LD · MD).
+Las claves de estación son `feed:stop_id` y pueden combinarse con `,`
+(`/estacion/cer:18000,ld:18000` muestra Atocha completa).
 
 ## Desarrollo local
 
 ```bash
 cp .env.example .env
-docker compose up -d db          # solo Postgres
-# primera carga del GTFS estático (~1-3 min, el zip de cercanías ocupa ~240 MB descomprimido)
-docker compose up -d collector api
-cd web && npm install && npm run dev   # http://localhost:4321
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+docker compose up -d collector api          # usa la BD en :5433
+cd web && npm install && npm run dev        # http://localhost:4321
+# con proxy HTTPS local: docker compose --profile standalone up -d
 ```
 
-La API queda en `http://localhost:8000` (docs en `/docs`).
+Tests: `pip install -r requirements-dev.txt && pytest tests -m "not integration"`.
 
-## Despliegue en el VPS (OVH)
+## Despliegue (VPS con Coolify/Traefik)
 
 ```bash
-git clone <repo> && cd retrasosreferealertas
-cp .env.example .env   # poner POSTGRES_PASSWORD fuerte y DOMAIN=tudominio.com
-docker compose up -d --build
+git clone <repo> trenes && cd trenes
+cp .env.example .env   # DOMAIN=trenes.h1756.es, POSTGRES_PASSWORD fuerte
+sudo docker compose -f docker-compose.yml -f infra/compose/docker-compose.prod.yml \
+  --env-file .env -p trenes up -d --build
 ```
 
-Caddy obtiene el certificado HTTPS automáticamente para `DOMAIN`. Apunta el DNS A/AAAA del dominio al VPS antes del primer arranque.
+Traefik emite el certificado Let's Encrypt solo; hace falta DNS apuntando al
+VPS (aquí `*.h1756.es` ya lo hace). Sin Traefik, usa el perfil `standalone`
+con Caddy: `docker compose --profile standalone up -d` con `DOMAIN` en `.env`.
 
 ## Fiabilidad del dato (decisiones deliberadas)
 
-- La especificación GTFS-RT avisa: **la ausencia de actualización no significa puntualidad**. La UI marca cada fila como `a tiempo` solo si hay dato RT; si no, `prog.`/`s/d`.
-- Los trip_updates de Renfe suelen incluir **solo la próxima parada**: para el resto de paradas se propaga el retraso a nivel de viaje (`delay_source: trip` vs `stop`).
-- Los vehículos de LD se actualizan cada ~15 min (los de Cercanías, ~20 s). La UI muestra la antigüedad del dato.
-- En `observations` se guarda histórico para estadísticas de puntualidad por franja/línea/día (fase posterior).
-- Retención: observaciones 90 días; `rt_trip` se purga tras 12 h sin actualización.
+- La especificación GTFS-RT avisa: **la ausencia de actualización no significa
+  puntualidad** → etiquetamos `obs.` (flota), `est.` (predicción RT) o
+  `programado` (sin RT); nunca deducimos llegadas reales.
+- Los trip_updates de Renfe solo traen la **próxima parada**: el resto propaga
+  el delay del viaje.
+- El ranking distingue `observed` vs `predicted`.
+- Retención: observaciones 90 días; backups 15 días; purga de `rt_trip` >12 h.
 
-## Fuentes oficiales (data.renfe.com)
+## Estado del proyecto
 
-| Recurso | URL | Cadencia |
-|---|---|---|
-| GTFS Cercanías | `ssl.renfe.com/ftransit/Fichero_CER_FOMENTO/fomento_transit.zip` | diario |
-| GTFS AV/LD/MD | `ssl.renfe.com/gtransit/Fichero_AV_LD/google_transit.zip` | diario |
-| trip_updates CER | `gtfsrt.renfe.com/trip_updates.json` | ~20 s |
-| trip_updates LD | `gtfsrt.renfe.com/trip_updates_LD.json` | ~30 s |
-| vehicle_positions CER/LD | `gtfsrt.renfe.com/vehicle_positions[_LD].json` | ~20 s / 15 min |
-| alerts CER | `gtfsrt.renfe.com/alerts.json` | ~20 s |
+Ver `CHANGELOG.md`. Cobertura y limitaciones reales en
+`docs/data/source-audit.md`; análisis de competidores en
+`docs/research/competitive-analysis.md`; decisiones de reutilización en
+`docs/research/prior-art.md`.
 
-Reutilización permitida con atribución (CC-BY 4.0 / condiciones del portal Renfe).
+**Origen de los datos: Renfe Operadora** (CC-BY 4.0). Proyecto independiente,
+no oficial, no afiliado ni patrocinado por Renfe.

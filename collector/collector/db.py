@@ -1,8 +1,10 @@
-import time
 import logging
+import time
+
 from sqlalchemy import create_engine, text
-from .config import DATABASE_URL
-from .models import Base
+
+from collector.config import DATABASE_URL
+from collector.models import Base
 
 log = logging.getLogger("collector")
 

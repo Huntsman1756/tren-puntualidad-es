@@ -2,10 +2,10 @@ import csv
 import io
 import re
 import zipfile
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .config import TZ
+from collector.config import TZ
 
 TZINFO = ZoneInfo(TZ)
 
@@ -28,7 +28,7 @@ def read_gtfs_csv(zf: zipfile.ZipFile, name: str):
         for row in reader:
             if not any(row):
                 continue
-            yield {h: (v.strip() if v else "") for h, v in zip(header, row)}
+            yield {h: (v.strip() if v else "") for h, v in zip(header, row, strict=False)}
 
 
 def hms_to_secs(s: str):

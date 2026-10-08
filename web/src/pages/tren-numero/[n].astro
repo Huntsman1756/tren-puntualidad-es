@@ -1,0 +1,36 @@
+---
+import Base from '../../layouts/Base.astro';
+import { api } from '../../lib/api';
+import { fmtDelay } from '../../lib/format';
+
+const n = Astro.params.n || '';
+let items: any[] = [];
+try { items = await api.trainByNumber(n); } catch {}
+if (items.length === 1) {
+  return Astro.redirect(`/tren/${items[0].feed}/${encodeURIComponent(items[0].trip_id)}`);
+}
+---
+<Base title={`Tren ${n} — Trenes a tiempo`}>
+  <nav class="breadcrumb"><a href="/">← Buscador</a></nav>
+  <h1>Tren nº {n}</h1>
+  {items.length === 0 && (
+    <div class="card muted">No hay ningún tren con ese número en circulación o programado hoy.</div>
+  )}
+  {items.length > 0 && (
+    <div class="card">
+      <p class="muted">Instancias encontradas hoy:</p>
+      <table class="board"><tbody>
+        {items.map((t: any) => {
+          const d = fmtDelay(t.fleet_delay != null ? t.fleet_delay * 60 : t.delay);
+          return (
+            <tr>
+              <td>{t.line ? <span class="line-tag">{t.line}</span> : ''}</td>
+              <td><a href={`/tren/${t.feed}/${encodeURIComponent(t.trip_id)}`}>{t.trip_id}</a></td>
+              <td><span class={`badge ${d.cls}`}>{d.text}</span></td>
+            </tr>
+          );
+        })}
+      </tbody></table>
+    </div>
+  )}
+</Base>

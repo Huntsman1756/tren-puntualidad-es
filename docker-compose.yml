@@ -43,6 +43,7 @@ services:
       - api
 
   caddy:
+    profiles: ["standalone"]
     image: caddy:2-alpine
     restart: unless-stopped
     ports:

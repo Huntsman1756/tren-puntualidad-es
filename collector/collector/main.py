@@ -4,14 +4,24 @@ import logging
 import time
 from datetime import datetime, timedelta
 
-from .config import (
-    GTFS_STATIC, POLL_ALERTS, POLL_STATIC, POLL_TRIP_UPDATES,
+from collector.config import (
+    GTFS_STATIC,
+    POLL_ALERTS,
+    POLL_FLOTA,
+    POLL_STATIC,
+    POLL_TRIP_UPDATES,
     POLL_VEHICLE_POSITIONS,
 )
-from .gtfsutil import TZINFO
-from .db import wait_and_create
-from .realtime import poll_alerts, poll_trip_updates, poll_vehicle_positions, prune_history
-from .static_load import maybe_reload
+from collector.db import wait_and_create
+from collector.gtfsutil import TZINFO
+from collector.realtime import (
+    poll_alerts,
+    poll_fleet,
+    poll_trip_updates,
+    poll_vehicle_positions,
+    prune_history,
+)
+from collector.static_load import maybe_reload
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,6 +74,16 @@ async def rt_vehicle_loop():
         await asyncio.sleep(POLL_VEHICLE_POSITIONS)
 
 
+async def fleet_loop():
+    while True:
+        try:
+            n = await asyncio.to_thread(poll_fleet)
+            log.info("flota: %d trenes", n)
+        except Exception:
+            log.exception("flota failed")
+        await asyncio.sleep(POLL_FLOTA)
+
+
 async def alerts_loop():
     while True:
         try:
@@ -97,7 +117,7 @@ async def main():
         except Exception:
             log.exception("initial static load %s failed", feed)
     await asyncio.gather(
-        rt_trip_loop(), rt_vehicle_loop(), alerts_loop(),
+        rt_trip_loop(), rt_vehicle_loop(), fleet_loop(), alerts_loop(),
         static_loop(), maintenance_loop(),
     )
 

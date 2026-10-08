@@ -1,0 +1,75 @@
+---
+import Base from '../layouts/Base.astro';
+import { api } from '../lib/api';
+
+let st: any = null;
+let err = false;
+try { st = await api.dataStatus(); } catch { err = true; }
+
+const NAMES: Record<string, string> = {
+  rt_trip_updates_cer: 'Horarios RT Cercanías/Rodalies',
+  rt_trip_updates_ld: 'Horarios RT AV/LD/MD',
+  rt_vehicles_cer: 'Posiciones Cercanías',
+  rt_vehicles_ld: 'Posiciones AV/LD/MD',
+  rt_fleet_cer: 'Flota visor Renfe (observado)',
+  rt_alerts_cer: 'Avisos e incidencias',
+  static_loaded_cer: 'GTFS estático Cercanías',
+  static_loaded_ld: 'GTFS estático AV/LD/MD',
+};
+function ago(sec?: number) {
+  if (sec == null) return 'sin datos';
+  if (sec < 90) return `${sec} s`;
+  if (sec < 5400) return `${Math.round(sec / 60)} min`;
+  return `${(sec / 3600).toFixed(1)} h`;
+}
+function cls(sec?: number, warn = 120, bad = 900) {
+  if (sec == null) return 'nodata';
+  return sec <= warn ? 'ok' : sec <= bad ? 'warn' : 'bad';
+}
+---
+<Base title="Estado de los datos — Trenes a tiempo"
+    description="Frescura y cobertura en tiempo real de las fuentes oficiales de Renfe utilizadas por esta web.">
+  <h1>Estado de los datos</h1>
+  <p class="muted">Frescura real de cada fuente. Si un feed lleva minutos sin
+    actualizarse, la web lo muestra en lugar de ocultarlo.</p>
+
+  {err && <div class="card alert">No se puede contactar con la API.</div>}
+  {st && (
+    <>
+      <div class="card">
+        <h2 style="margin-top:0;font-size:1rem">Frescura por fuente</h2>
+        <table class="board">
+          <thead><tr><th>Fuente</th><th>Última actualización</th><th>Estado</th></tr></thead>
+          <tbody>
+            {Object.entries(NAMES).map(([k, label]) => {
+              const f = st.feeds[k];
+              const isStatic = k.startsWith('static');
+              // alerts solo se regenera cuando cambian los avisos: umbrales laxos
+              const warn = isStatic ? 172800 : k === 'rt_alerts_cer' ? 86400 : 120;
+              const bad = isStatic ? 604800 : k === 'rt_alerts_cer' ? 3 * 86400 : 900;
+              return (
+                <tr>
+                  <td>{label}</td>
+                  <td>{f ? ago(f.age_sec) + ' ago' : 'sin datos'}</td>
+                  <td><span class={`badge ${cls(f?.age_sec, warn, bad)}`}>
+                    {f ? (f.age_sec <= warn ? 'fresco' : f.age_sec <= bad ? 'atrasado' : 'obsoleto') : 'sin datos'}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2 style="margin-top:0;font-size:1rem">Cobertura</h2>
+        <table class="board">
+          <tbody>
+            <tr><td>Estaciones Cercanías/Rodalies</td><td>{st.stations_by_feed?.cer ?? '—'}</td></tr>
+            <tr><td>Estaciones AV/LD/MD</td><td>{st.stations_by_feed?.ld ?? '—'}</td></tr>
+            <tr><td>Trenes con dato RT ahora (CER)</td><td>{st.active_rt_trips?.cer ?? '—'}</td></tr>
+            <tr><td>Trenes con dato RT ahora (LD)</td><td>{st.active_rt_trips?.ld ?? '—'}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </>
+  )}
+</Base>

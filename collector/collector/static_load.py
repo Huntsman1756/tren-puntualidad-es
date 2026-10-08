@@ -1,17 +1,22 @@
 """Descarga y carga del GTFS estático (por feed: 'cer' | 'ld')."""
 import io
 import logging
+import shutil
 import time
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import httpx
 from sqlalchemy import text
 
-from .config import GTFS_STATIC
-from .db import engine, get_meta, set_meta
-from .gtfsutil import (
-    TZINFO, expand_service_days, extract_train_number, hms_to_secs, read_gtfs_csv,
+from collector.config import GTFS_STATIC
+from collector.db import engine, get_meta, set_meta
+from collector.gtfsutil import (
+    TZINFO,
+    expand_service_days,
+    extract_train_number,
+    hms_to_secs,
+    read_gtfs_csv,
 )
 
 log = logging.getLogger("collector.static")
@@ -126,8 +131,22 @@ def remote_signature(url: str) -> str:
         return ""
 
 
+MIN_FREE_BYTES = int(__import__("os").environ.get("MIN_FREE_BYTES", 2 * 1024**3))
+
+
+def disk_ok() -> bool:
+    free = shutil.disk_usage("/").free
+    if free < MIN_FREE_BYTES:
+        log.error("disco bajo presión: %d MB libres; se omite la recarga estática",
+                  free // 1024**2)
+        return False
+    return True
+
+
 def maybe_reload(feed: str, force=False) -> bool:
     """Descarga y recarga el GTFS estático si la firma remota cambió."""
+    if not disk_ok():
+        return False
     url = GTFS_STATIC[feed]
     sig = remote_signature(url)
     with engine.begin() as conn:

@@ -1,0 +1,59 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base title="Fuentes y metodología — Trenes a tiempo">
+  <h1>Fuentes y metodología</h1>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Origen de los datos</h2>
+    <p>Todos los datos proceden de <strong>Renfe Operadora</strong>, a través de su
+      portal de datos abiertos <a href="https://data.renfe.com">data.renfe.com</a>
+      (licencia CC-BY 4.0) y de los documentos públicos que alimentan su visor
+      oficial <a href="https://tiempo-real.renfe.com">tiempo-real.renfe.com</a>.</p>
+    <p><strong>Proyecto independiente, no oficial, no afiliado ni patrocinado por Renfe.</strong></p>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Qué significa cada etiqueta</h2>
+    <table class="board">
+      <tbody>
+        <tr><td><span class="badge ok">a tiempo · obs.</span></td>
+            <td>Renfe observa el tren en circulación con menos de 2 min de retraso.</td></tr>
+        <tr><td><span class="badge warn">+N min · obs.</span></td>
+            <td>Retraso <strong>observado</strong> actual notificado por el visor oficial.</td></tr>
+        <tr><td><span class="badge warn">+N min · est.</span></td>
+            <td><strong>Estimación</strong>: procede del feed GTFS-RT (predicción de la próxima
+                parada propagada al resto del trayecto).</td></tr>
+        <tr><td><span class="badge nodata">programado</span></td>
+            <td>Solo existe el horario teórico. <strong>No implica puntualidad.</strong></td></tr>
+        <tr><td><span class="badge cancel">suprimido</span></td>
+            <td>Cancelación comunicada por el feed oficial.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Limitaciones honestas</h2>
+    <ul>
+      <li>Los trip_updates de Renfe solo informan la <strong>próxima parada</strong>
+          de cada tren; para el resto se propaga el retraso del viaje (etiqueta «est.»).</li>
+      <li>Las posiciones de larga distancia se renuevan cada ~15 minutos.</li>
+      <li>No existe feed oficial de <strong>llegada efectiva</strong>: no mostramos
+          llegadas observadas como hechos, solo estimaciones.</li>
+      <li>La vía/andén solo se muestra cuando Renfe la publica.</li>
+      <li>Los trayectos solo cubren servicios <strong>directos</strong> (sin transbordo).</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Frecuencias</h2>
+    <ul>
+      <li>Cercanías tiempo real: cada ~25 s (fuentes RT) + ~45 s (flota observada).</li>
+      <li>Larga distancia tiempo real: cada ~30 s (el proveedor renueva cada ~30 s;
+          posiciones ~15 min).</li>
+      <li>Horarios estáticos: recarga diaria y por cambio de firma del fichero.</li>
+    </ul>
+    <p class="muted">Consulta la <a href="/estado">página de estado</a> para la
+      frescura actual de cada fuente.</p>
+  </div>
+</Base>

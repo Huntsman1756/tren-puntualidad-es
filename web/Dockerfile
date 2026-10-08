@@ -12,5 +12,7 @@ ENV NODE_ENV=production HOST=0.0.0.0 PORT=4321
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
+RUN chown -R node:node /app
+USER node
 EXPOSE 4321
 CMD ["node", "./dist/server/entry.mjs"]

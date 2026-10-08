@@ -2,11 +2,11 @@
 
 ## Comandos
 
-- Stack completo: `docker compose up -d --build` (db + collector + api + web + caddy)
+- Stack completo: `docker compose --profile standalone up -d --build` (incluye Caddy)
 - Solo datos para desarrollo: `docker compose up -d db collector api`
 - Frontend local: `cd web && npm install && npm run dev` (necesita API en :8000 o PUBLIC_API_URL)
 - Logs collector: `docker compose logs -f collector`
-- API docs: http://localhost:8000/docs
+- API docs: http://localhost:8000/docs (API v1 bajo /api/v1)
 
 ## Convenciones
 

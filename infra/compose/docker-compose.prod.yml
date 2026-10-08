@@ -1,0 +1,101 @@
+# Despliegue en VPS con Coolify/Traefik existente.
+# Traefik ya publica :80/:443; nosotros solo etiquetamos el servicio web.
+# Uso: docker compose -f docker-compose.yml -f infra/compose/docker-compose.prod.yml up -d --build
+services:
+  db:
+    restart: unless-stopped
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - backups:/backups
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+    # Postgres nunca expone puerto al host.
+
+  collector:
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  api:
+    restart: unless-stopped
+    environment:
+      ALLOWED_ORIGINS: "https://${DOMAIN}"
+      RATE_LIMIT_PER_MIN: "120"
+    networks:
+      - default
+      - coolify
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-api.rule: "Host(`${DOMAIN}`) && PathPrefix(`/api`)"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-api.entrypoints: "https"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-api.tls.certresolver: "letsencrypt"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-api.priority: "100"
+      traefik.http.services.${COMPOSE_PROJECT_NAME}-api.loadbalancer.server.port: "8000"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  web:
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://api:8000
+    networks:
+      - default
+      - coolify
+    labels:
+      traefik.enable: "true"
+      # HTTPS
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web.rule: "Host(`${DOMAIN}`)"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web.entrypoints: "https"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web.tls.certresolver: "letsencrypt"
+      traefik.http.services.${COMPOSE_PROJECT_NAME}-web.loadbalancer.server.port: "4321"
+      # redirección http -> https
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web-http.rule: "Host(`${DOMAIN}`)"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web-http.entrypoints: "http"
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web-http.middlewares: "${COMPOSE_PROJECT_NAME}-https"
+      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-https.redirectscheme.scheme: "https"
+      # cabeceras de seguridad
+      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web.middlewares: "${COMPOSE_PROJECT_NAME}-sec"
+      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-sec.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-sec.headers.stsIncludeSubdomains: "true"
+      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-sec.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-sec.headers.frameDeny: "true"
+      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-sec.headers.referrerPolicy: "strict-origin-when-cross-origin"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # Backup diario de Postgres vía contenedor con cron ligero.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes:
+      - backups:/backups
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-renfe}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-renfe}
+      PGDATABASE: ${POSTGRES_DB:-renfe}
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          TS=$$(date +%Y%m%d-%H%M%S)
+          pg_dump | gzip > /backups/renfe-$$TS.dump.gz
+          ls -t /backups/renfe-*.dump.gz | tail -n +15 | xargs -r rm -f
+          sleep 86400
+        done
+
+networks:
+  coolify:
+    external: true
+
+volumes:
+  backups:

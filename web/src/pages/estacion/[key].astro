@@ -1,0 +1,48 @@
+---
+import Base from '../../layouts/Base.astro';
+import Board from '../../components/Board.svelte';
+import { api } from '../../lib/api';
+import { FEED_NAME } from '../../lib/format';
+
+const key = Astro.params.key || '';
+const pairs = key.split(',').map((p) => p.trim().split(':')).filter((p) => p.length === 2);
+if (!pairs.length) return Astro.redirect('/');
+
+let infos: any[] = [];
+let board: any = { items: [] };
+let alerts: any[] = [];
+try {
+  infos = (await Promise.all(
+    pairs.map(([f, s]) => api.station(f, s).catch(() => null)),
+  )).filter(Boolean);
+  if (!infos.length) return Astro.redirect('/');
+  board = await api.board(key, 'departures', 180);
+  const alertLists = await Promise.all(
+    infos.map((i) => api.alerts(i.feed, i.stop_id).catch(() => [])),
+  );
+  const seen = new Set();
+  alerts = alertLists.flat().filter((a) => (seen.has(a.id) ? false : seen.add(a.id)));
+} catch (e) {
+  return Astro.redirect('/');
+}
+const name = infos[0].name;
+const networks = [...new Set(infos.map((i) => FEED_NAME[i.feed] || i.network))];
+const canonical = `/estacion/${key}`;
+---
+<Base title={`${name} — horarios y retrasos | Trenes a tiempo`}
+    description={`Próximas salidas y llegadas en ${name}: horarios programados, estimaciones en tiempo real, retrasos y avisos de Renfe.`}
+    canonical={canonical}>
+  <nav class="breadcrumb"><a href="/">← Buscador</a></nav>
+  <h1>{name}</h1>
+  <p class="muted">{networks.join(' + ')}</p>
+
+  {alerts.map((a) => (
+    <div class="card alert">
+      <strong>Aviso:</strong> {a.text || 'Incidencia notificada por Renfe'}
+    </div>
+  ))}
+
+  <div class="card">
+    <Board client:load stops={key} initialItems={board.items} initialKind="departures" />
+  </div>
+</Base>

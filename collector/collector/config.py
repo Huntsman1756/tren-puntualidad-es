@@ -28,3 +28,8 @@ POLL_ALERTS = int(os.environ.get("POLL_ALERTS", "60"))
 POLL_STATIC = int(os.environ.get("POLL_STATIC", "3600"))
 
 TZ = "Europe/Madrid"
+
+FLOTA_URL = "https://tiempo-real.renfe.com/renfe-visor/flota.json"
+SALIDAS_URL = "https://tiempo-real.renfe.com/renfe-json-cutter/write/salidas/estacion/{code}.json"
+STATIONS_GEOJSON = "https://tiempo-real.renfe.com/data/estaciones.geojson"
+POLL_FLOTA = int(os.environ.get("POLL_FLOTA", "45"))

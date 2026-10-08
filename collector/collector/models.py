@@ -1,7 +1,13 @@
 """Esquema de datos compartido (collector lo crea, api lo lee)."""
 from sqlalchemy import (
-    BigInteger, Column, Date, DateTime, Float, ForeignKey, Index, Integer,
-    String, Text, func,
+    BigInteger,
+    Column,
+    Date,
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase
@@ -138,3 +144,23 @@ class Meta(Base):
     __tablename__ = "meta"
     key = Column(String(64), primary_key=True)
     value = Column(Text)
+
+
+class RtFleet(Base):
+    """Estado observado por tren desde el visor oficial (flota.json)."""
+    __tablename__ = "rt_fleet"
+    feed = Column(String(8), primary_key=True, default="cer")
+    trip_id = Column(String(64), primary_key=True)
+    train_number = Column(String(16))
+    line = Column(String(16))
+    delay_min = Column(Integer)          # retrasoMin observado
+    cur_stop_id = Column(String(32))
+    next_stop_id = Column(String(32))
+    next_eta = Column(BigInteger)        # epoch
+    origin_stop_id = Column(String(32))
+    dest_stop_id = Column(String(32))
+    lat = Column(Float)
+    lon = Column(Float)
+    platform = Column(String(16))
+    next_platform = Column(String(16))
+    ts = Column(BigInteger)

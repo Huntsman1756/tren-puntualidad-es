@@ -3,31 +3,37 @@ import Base from '../layouts/Base.astro';
 import { api } from '../lib/api';
 import { fmtDelay, fmtTime } from '../lib/format';
 
-const from = Astro.url.searchParams.get('from');
-const to = Astro.url.searchParams.get('to');
+const from = Astro.url.searchParams.get('from') || '';
+const to = Astro.url.searchParams.get('to') || '';
 
-let items = [], error = null, fromName = '', toName = '';
+let items: any[] = [];
+let error: string | null = null;
+let fromName = 'Origen', toName = 'Destino';
 if (from && to) {
   try {
-    const [fs, ts] = from.split(':');
-    const [ff, tf] = to.split(':');
+    const fp = from.split(',')[0].split(':');
+    const tp = to.split(',')[0].split(':');
     [items, fromName, toName] = await Promise.all([
       api.journeys(from, to),
-      api.station(fs, ts).then((s) => s.name).catch(() => ts),
-      api.station(ff, tf).then((s) => s.name).catch(() => tf),
-    ]).then(([j, a, b]) => [j, a, b]);
+      api.station(fp[0], fp[1]).then((s: any) => s.name).catch(() => fp[1]),
+      api.station(tp[0], tp[1]).then((s: any) => s.name).catch(() => tp[1]),
+    ]);
   } catch (e) {
     error = 'No se ha podido cargar el trayecto.';
   }
 }
+const canonical = `/trayecto?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
 ---
-<Base title={`Trayecto ${fromName} → ${toName}`}>
-  <p><a href="/">← Buscador</a></p>
+<Base title={`${fromName} → ${toName} — horarios y retrasos`}
+    description={`Próximos trenes directos de ${fromName} a ${toName}: hora programada, estimada y retrasos en tiempo real.`}
+    canonical={canonical}>
+  <nav class="breadcrumb"><a href="/">← Buscador</a></nav>
   <h1>{fromName} → {toName}</h1>
 
   {error && <div class="card alert">{error}</div>}
   {!error && items.length === 0 && (
-    <div class="card muted">No hay trenes directos en las próximas 8 horas para este trayecto.</div>
+    <div class="card muted">No hay trenes directos en las próximas 8 horas para este trayecto.
+      Solo se muestran servicios sin transbordo.</div>
   )}
 
   {items.length > 0 && (
@@ -38,7 +44,7 @@ if (from && to) {
               <th class="hide-sm">Tren</th><th>Estado</th></tr>
         </thead>
         <tbody>
-          {items.map((j) => {
+          {items.map((j: any) => {
             const d = fmtDelay(j.delay_sec);
             return (
               <tr>
@@ -48,12 +54,18 @@ if (from && to) {
                     <><br /><span class="muted">→ {fmtTime(j.dep_estimated)}</span></>
                   )}
                 </td>
-                <td>{fmtTime(j.arr_estimated)}</td>
+                <td>
+                  {fmtTime(j.arr_scheduled)}
+                  {j.realtime && j.arr_estimated !== j.arr_scheduled && (
+                    <><br /><span class="muted">→ {fmtTime(j.arr_estimated)}</span></>
+                  )}
+                </td>
                 <td>{j.line ? <span class="line-tag">{j.line}</span> : '—'}</td>
                 <td class="hide-sm">
                   <a href={`/tren/${j.feed}/${encodeURIComponent(j.trip_id)}`}>{j.train_number || j.trip_id}</a>
                 </td>
-                <td><span class={`badge ${d.cls}`}>{d.text}</span></td>
+                <td><span class={`badge ${j.realtime ? d.cls : 'nodata'}`}>
+                  {j.realtime ? d.text : 'programado'}</span></td>
               </tr>
             );
           })}
