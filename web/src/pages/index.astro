@@ -1,65 +1,73 @@
 ---
 import Base from '../layouts/Base.astro';
-import SearchBox from '../components/SearchBox.svelte';
-import JourneySearch from '../components/JourneySearch.svelte';
+import Planner from '../components/Planner.svelte';
+import FavJourneys from '../components/FavJourneys.svelte';
 import { api } from '../lib/api';
-import { fmtDelay } from '../lib/format';
+import { fmtDelay, ageText } from '../lib/format';
 
 let ranking: any[] = [];
 let status: any = null;
 try {
   [ranking, status] = await Promise.all([api.ranking(8), api.status()]);
 } catch {}
-const maxAge = status?.feeds ? Math.max(
-  status.feeds.rt_trip_updates_cer?.age_sec ?? 9999,
-  status.feeds.rt_trip_updates_ld?.age_sec ?? 9999) : null;
+const rtC = status?.feeds?.rt_trip_updates_cer?.ts;
+const rtL = status?.feeds?.rt_trip_updates_ld?.ts;
 ---
 <Base>
-  <h1>Tu tren, sin complicaciones</h1>
-  <p class="muted">Salidas, llegadas y retrasos de cualquier estación Renfe —
-    Cercanías, Rodalies, AVE, Larga y Media Distancia.</p>
+  <section class="hero">
+    <h1>Tu tren, sin complicaciones</h1>
+    <p class="muted">Salidas, llegadas y retrasos de cualquier estación Renfe —
+      Cercanías, Rodalies, AVE, Larga y Media Distancia.</p>
+  </section>
 
-  <div class="card">
-    <SearchBox client:load autoFocus={true} />
-    <p class="muted hint">Prueba con «Atocha», «Sants», «Alcala» o un nº de tren como «06180».</p>
+  <div class="card planner-card">
+    <Planner client:load />
   </div>
 
   <div class="card">
-    <h2>Trayecto origen → destino</h2>
-    <JourneySearch client:load />
+    <FavJourneys client:load />
   </div>
 
-  {maxAge !== null && maxAge > 180 && (
-    <div class="card alert" role="alert">
-      Los datos en tiempo real llevan {Math.round(maxAge / 60)} min sin actualizarse.
-      Los horarios mostrados pueden ser solo los programados.
-    </div>
+  {status?.feeds && (rtC || rtL) && (
+    <p class="muted fresh">
+      Datos en tiempo real: Cercanías {ageText(rtC)} · LD {ageText(rtL)} ·{' '}
+      <a href="/estado">ver estado detallado</a>
+    </p>
   )}
 
   {ranking.length > 0 && (
     <div class="card">
       <h2>Mayores retrasos ahora · <a href="/retrasos">ver todos</a></h2>
-      <table class="board">
-        <tbody>
-          {ranking.map((r: any) => {
-            const d = fmtDelay(r.delay);
-            return (
-              <tr>
-                <td><span class="line-tag">{r.line || '—'}</span></td>
-                <td><a href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>{r.train_number || r.trip_id}</a></td>
-                <td class="hide-sm">{r.destination || '—'}</td>
-                <td><span class={`badge ${d.cls}`}>{d.text}{r.delay_source === 'observed' ? ' · obs.' : ''}</span></td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div class="rank">
+        {ranking.map((r: any) => {
+          const d = fmtDelay(r.delay);
+          return (
+            <a class="rk" href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>
+              <span class="line-tag">{r.line || '—'}</span>
+              <span class="rknum">{r.train_number || r.trip_id}</span>
+              <span class="rkdest">{r.destination || '—'}</span>
+              <span class={`badge ${d.cls}`}>
+                {d.text}{r.delay_source === 'observed' ? ' · obs.' : ''}</span>
+            </a>
+          );
+        })}
+      </div>
     </div>
   )}
 </Base>
 <style>
-  h1 { margin-bottom: .2rem; }
+  .hero { padding: .8rem 0 .2rem; }
+  .hero h1 { margin: 0 0 .3rem; font-size: 1.7rem; letter-spacing: -.02em; }
+  .hero p { margin: 0; }
+  .planner-card { border-color: var(--accent); border-width: 1px; }
   h2 { margin: 0 0 .6rem; font-size: 1rem; }
   h2 a { font-size: .8rem; font-weight: 400; }
-  .hint { font-size: .8rem; margin: .6rem 0 0; }
+  .fresh { font-size: .78rem; text-align: center; margin: .2rem 0 0; }
+  .rank { display: flex; flex-direction: column; }
+  .rk { display: flex; align-items: baseline; gap: .7rem; padding: .45rem .2rem;
+        border-top: 1px solid var(--border); color: var(--text); }
+  .rk:first-child { border-top: 0; }
+  .rknum { min-width: 4.5rem; font-variant-numeric: tabular-nums; }
+  .rkdest { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            color: var(--muted); }
 </style>

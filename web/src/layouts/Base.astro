@@ -11,7 +11,7 @@ const canonicalUrl = canonical ? new URL(canonical, site).href : Astro.url.href;
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="description" content={description} />
   <link rel="canonical" href={canonicalUrl} />
   <meta property="og:title" content={title} />
@@ -19,37 +19,72 @@ const canonicalUrl = canonical ? new URL(canonical, site).href : Astro.url.href;
   <meta property="og:type" content="website" />
   <meta property="og:url" content={canonicalUrl} />
   <meta property="og:locale" content="es_ES" />
-  <meta name="theme-color" content="#0f1419" />
+  <meta name="theme-color" content="#0f1419" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚆</text></svg>" />
   <title>{title}</title>
+  <script is:inline>
+    // tema: localStorage > sistema
+    (() => {
+      try {
+        const t = localStorage.getItem('tt_theme')
+          || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+        document.documentElement.dataset.theme = t;
+      } catch (e) { document.documentElement.dataset.theme = 'dark'; }
+    })();
+  </script>
   <style is:global>
     :root {
-      --bg: #0f1419; --card: #1a222c; --border: #2a3542;
-      --text: #e8eef4; --muted: #9fb0c0; --accent: #4da3ff;
+      --bg: #0f1419; --card: #1a222c; --card2: #141b23; --border: #2a3542;
+      --text: #e8eef4; --muted: #9fb0c0; --accent: #4da3ff; --accent-dim: #1a2c40;
+      --accent-fg: #06101c;
       --ok: #3ecf8e; --warn: #f5b942; --bad: #ef6351;
+      --ok-bg: #12382a; --warn-bg: #403312; --bad-bg: #452020; --nd-bg: #242e39;
+      --shadow: 0 8px 24px rgba(0,0,0,.35);
+    }
+    [data-theme='light'] {
+      --bg: #f6f7f9; --card: #ffffff; --card2: #eef1f4; --border: #d8dee5;
+      --text: #1b2430; --muted: #5a6b7d; --accent: #0b63ce; --accent-dim: #e3efff;
+      --accent-fg: #ffffff;
+      --ok: #0e8a5f; --warn: #9a6b00; --bad: #c4382b;
+      --ok-bg: #d9f2e7; --warn-bg: #f7ecc9; --bad-bg: #fadcd8; --nd-bg: #e8ecf1;
+      --shadow: 0 8px 24px rgba(20,30,45,.10);
     }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
            background: var(--bg); color: var(--text); line-height: 1.45; }
     a { color: var(--accent); text-decoration: none; }
-    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
+    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+    summary:focus-visible {
       outline: 2px solid var(--accent); outline-offset: 2px; }
-    .wrap { max-width: 780px; margin: 0 auto; padding: 1rem; }
-    header.site { border-bottom: 1px solid var(--border); padding: .8rem 1rem; }
-    header.site .wrap { display: flex; gap: 1.2rem; align-items: baseline; flex-wrap: wrap; }
-    header.site a.brand { color: var(--text); font-weight: 700; font-size: 1.1rem; }
-    nav { display: flex; gap: 1rem; }
-    nav a { color: var(--muted); font-size: .9rem; }
-    nav a:hover { color: var(--text); }
+    .wrap { max-width: 800px; margin: 0 auto; padding: 1rem; }
+    header.site { border-bottom: 1px solid var(--border); padding: .7rem 1rem;
+                  position: sticky; top: 0; background: var(--bg); z-index: 20; }
+    header.site .wrap { display: flex; gap: 1rem; align-items: center;
+                        flex-wrap: wrap; padding: 0 .4rem; }
+    header.site a.brand { color: var(--text); font-weight: 700; font-size: 1.05rem;
+                          display: flex; align-items: center; gap: .45rem; }
+    nav { display: flex; gap: .3rem; margin-left: auto; }
+    nav a { color: var(--muted); font-size: .88rem; padding: .35rem .6rem;
+            border-radius: 8px; }
+    nav a:hover { color: var(--text); background: var(--card2); }
+    nav a[aria-current] { color: var(--accent); font-weight: 600; }
+    .theme-btn { border: 1px solid var(--border); background: var(--card);
+                 border-radius: 8px; padding: .3rem .55rem; cursor: pointer;
+                 font-size: .95rem; line-height: 1; }
     .card { background: var(--card); border: 1px solid var(--border);
-            border-radius: 12px; padding: 1rem; margin: .8rem 0; }
+            border-radius: 12px; padding: 1rem; margin: .8rem 0;
+            box-shadow: var(--shadow); }
+    .card.tight { padding: .7rem .9rem; }
     .badge { display: inline-block; padding: .15rem .55rem; border-radius: 999px;
-             font-size: .8rem; font-weight: 600; }
-    .badge.ok { background: #12382a; color: var(--ok); }
-    .badge.warn { background: #403312; color: var(--warn); }
-    .badge.bad { background: #452020; color: var(--bad); }
-    .badge.nodata { background: #242e39; color: var(--muted); }
-    .badge.cancel { background: #452020; color: var(--bad); }
-    .badge.obs { background: #0f2d40; color: #6fc3ff; }
+             font-size: .78rem; font-weight: 600; white-space: nowrap; }
+    .badge.ok { background: var(--ok-bg); color: var(--ok); }
+    .badge.warn { background: var(--warn-bg); color: var(--warn); }
+    .badge.bad { background: var(--bad-bg); color: var(--bad); }
+    .badge.nodata { background: var(--nd-bg); color: var(--muted); }
+    .badge.cancel { background: var(--bad-bg); color: var(--bad); }
+    .badge.semi { background: var(--accent-dim); color: var(--accent); }
     table.board { width: 100%; border-collapse: collapse; font-size: .95rem; }
     table.board th { text-align: left; color: var(--muted); font-weight: 500;
                      font-size: .78rem; text-transform: uppercase; letter-spacing: .04em;
@@ -60,17 +95,23 @@ const canonicalUrl = canonical ? new URL(canonical, site).href : Astro.url.href;
     .breadcrumb { font-size: .9rem; margin-bottom: .3rem; }
     .line-tag { display: inline-block; min-width: 2.2rem; text-align: center;
                 border-radius: 6px; padding: .1rem .4rem; font-weight: 700;
-                font-size: .85rem; background: #26313d; }
-    input[type=text], select { background: #11181f; color: var(--text);
+                font-size: .85rem; background: var(--card2); }
+    input[type=text], input[type=date], input[type=time], select {
+      background: var(--card2); color: var(--text);
       border: 1px solid var(--border); border-radius: 8px; padding: .6rem .8rem;
       width: 100%; font-size: 1rem; }
+    input[type=date], input[type=time] { width: auto; min-width: 0; }
     button { font-family: inherit; }
     footer.site { margin-top: 3rem; padding: 1.5rem 1rem; border-top: 1px solid var(--border);
                   color: var(--muted); font-size: .8rem; }
     .alert { border-left: 3px solid var(--warn); }
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden;
                clip: rect(0 0 0 0); white-space: nowrap; }
-    @media (max-width: 560px) { .hide-sm { display: none; } }
+    @media (max-width: 560px) {
+      .hide-sm { display: none; }
+      table.board { font-size: .88rem; }
+      table.board td { padding: .5rem .3rem; }
+    }
     @media (prefers-reduced-motion: reduce) {
       * { animation: none !important; transition: none !important; }
     }
@@ -79,12 +120,14 @@ const canonicalUrl = canonical ? new URL(canonical, site).href : Astro.url.href;
 <body>
   <header class="site">
     <div class="wrap">
-      <a class="brand" href="/">Trenes a tiempo</a>
-      <nav>
-        <a href="/retrasos">Retrasos ahora</a>
-        <a href="/estado">Estado de datos</a>
+      <a class="brand" href="/">🚆 <span>Trenes a tiempo</span></a>
+      <nav aria-label="Principal">
+        <a href="/retrasos">Retrasos</a>
+        <a href="/estado">Estado</a>
         <a href="/fuentes">Fuentes</a>
       </nav>
+      <button class="theme-btn" id="theme-toggle" aria-label="Cambiar tema"
+              title="Cambiar tema">◐</button>
     </div>
   </header>
   <main class="wrap">
@@ -99,5 +142,12 @@ const canonicalUrl = canonical ? new URL(canonical, site).href : Astro.url.href;
         <a href="/fuentes">Metodología y limitaciones</a>.</p>
     </div>
   </footer>
+  <script is:inline>
+    document.getElementById('theme-toggle')?.addEventListener('click', () => {
+      const cur = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+      document.documentElement.dataset.theme = cur;
+      try { localStorage.setItem('tt_theme', cur); } catch (e) {}
+    });
+  </script>
 </body>
 </html>

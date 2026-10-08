@@ -6,7 +6,7 @@ import unicodedata
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -71,6 +71,53 @@ def _now():
     return int(n.timestamp()), n.hour * 3600 + n.minute * 60 + n.second, n.date()
 
 
+def _parse_date(s: str | None):
+    """YYYY-MM-DD -> date. None -> hoy."""
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(400, "date debe ser YYYY-MM-DD") from None
+
+
+def _parse_time(s: str | None):
+    """HH:MM -> segundos desde medianoche local."""
+    if not s:
+        return None
+    try:
+        t = datetime.strptime(s, "%H:%M")
+        return t.hour * 3600 + t.minute * 60
+    except ValueError:
+        raise HTTPException(400, "time debe ser HH:MM") from None
+
+
+def _window(date_s: str | None, time_s: str | None, minutes: int):
+    """Resuelve (día_servicio_objetivo, lo_wall_secs, hi_wall_secs, es_hoy).
+
+    lo/hi se expresan en segundos de reloj del día objetivo; el SQL desplaza
+    `dep + (sd.day - :day)*86400` para capturar servicios del día anterior
+    que cruzan medianoche.
+    """
+    _, secs_now, today = _now()
+    day = _parse_date(date_s) or today
+    t0 = _parse_time(time_s)
+    if t0 is None:
+        t0 = secs_now - 300 if day == today else 0
+    return day, t0, t0 + minutes * 60, day == today
+
+
+def _haversine_m(lat1, lon1, lat2, lon2) -> float:
+    import math
+    if None in (lat1, lon1, lat2, lon2):
+        return 0.0
+    R = 6371000
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
 def _freshness():
     keys = ["rt_trip_updates_cer", "rt_trip_updates_ld", "rt_vehicles_cer",
             "rt_vehicles_ld", "rt_fleet_cer", "rt_alerts_cer",
@@ -114,6 +161,19 @@ def meta_status():
     return {"now": int(time.time()), "feeds": _freshness()}
 
 
+@v1.get("/meta/coverage")
+def meta_coverage():
+    """Cobertura temporal del GTFS por feed: primer y último día consultable."""
+    _, _, today = _now()
+    with engine.connect() as c:
+        rows = c.execute(text("""
+            SELECT feed, min(day) AS first_day, max(day) AS last_day
+            FROM service_days GROUP BY feed""")).mappings().all()
+    feeds = {r["feed"]: {"first_day": str(r["first_day"]),
+                        "last_day": str(r["last_day"])} for r in rows}
+    return {"today": str(today), "feeds": feeds}
+
+
 @v1.get("/stations/search")
 def stations_search(q: str = Query(min_length=2), limit: int = 15):
     """Búsqueda agrupada: estaciones físicas con mismo nombre en ambas
@@ -127,16 +187,24 @@ def stations_search(q: str = Query(min_length=2), limit: int = 15):
         elif nq in nn:
             contains.append(s)
     ordered = starts + contains
-    groups: dict[str, dict] = {}
+    # Agrupar por nombre normalizado SOLO si las paradas están a <1,5 km:
+    # evita fusionar estaciones homónimas en lugares distintos.
+    groups: dict[str, list[dict]] = {}
     out = []
     for s in ordered:
         key = _norm(s["name"])
-        if key in groups:
-            groups[key]["stops"].append({"feed": s["feed"], "stop_id": s["stop_id"]})
+        merged = False
+        for g in groups.get(key, []):
+            d = _haversine_m(g["lat"], g["lon"], s["lat"], s["lon"])
+            if d < 1500:
+                g["stops"].append({"feed": s["feed"], "stop_id": s["stop_id"]})
+                merged = True
+                break
+        if merged:
             continue
         g = {"name": s["name"], "lat": s["lat"], "lon": s["lon"],
              "stops": [{"feed": s["feed"], "stop_id": s["stop_id"]}]}
-        groups[key] = g
+        groups.setdefault(key, []).append(g)
         out.append(g)
     for g in out[:limit]:
         g["networks"] = [FEED_LABELS.get(st["feed"], st["feed"]) for st in g["stops"]]
@@ -163,20 +231,32 @@ def _parse_stops_param(stops: str):
     return pairs
 
 
-def _board(feed: str, stop_id: str, kind: str, minutes: int, limit: int):
-    _, secs_now, day = _now()
+def _board(feed: str, stop_id: str, kind: str, lo: int, hi: int,
+           day, with_rt: bool, limit: int, only_semidirect: bool = False):
     col = "dep" if kind == "departures" else "arr"
-    lo, hi = secs_now - 300, secs_now + minutes * 60
-    sql = text(f"""
-        SELECT st.{col} AS sched, st.arr, st.dep, st.seq,
-               t.trip_id, t.train_number, t.headsign,
-               r.short_name AS line, r.long_name AS route_name, r.color,
+    semi_sql = "AND tf.semidirect=1" if only_semidirect else ""
+    # with_rt=False en fechas ≠ hoy: los trip_id de CER se repiten a diario y
+    # filtrarían retrasos de hoy a viajes de otra fecha. LD lleva fecha en el id.
+    rt_join = "" if not with_rt else """
+        LEFT JOIN rt_trip rt ON rt.feed=t.feed AND rt.trip_id=t.trip_id
+        LEFT JOIN rt_stop_update su ON su.feed=t.feed AND su.trip_id=t.trip_id
+                                    AND su.stop_id=st.stop_id
+        LEFT JOIN rt_vehicle v ON v.feed=t.feed AND v.trip_id=t.trip_id
+        LEFT JOIN rt_fleet fl ON fl.feed=t.feed AND fl.trip_id=t.trip_id
+    """
+    rt_cols = "" if not with_rt else """,
                rt.delay AS trip_delay, su.delay AS stop_delay, su.time AS stop_time,
                rt.sched_rel,
                v.platform AS vp_platform, v.status AS vp_status,
                fl.delay_min AS fleet_delay, fl.platform AS fleet_platform,
                fl.next_platform AS fleet_next_platform, fl.next_eta AS fleet_eta,
-               fl.cur_stop_id AS fleet_cur_stop,
+               fl.cur_stop_id AS fleet_cur_stop"""
+    sql = text(f"""
+        SELECT st.{col} AS sched, st.arr, st.dep, st.seq,
+               st.{col} + (sd.day - :day) * 86400 AS eff_secs,
+               t.trip_id, t.train_number, t.headsign,
+               r.short_name AS line, r.long_name AS route_name, r.color,
+               tf.semidirect, tf.skipped,
                (SELECT s2.name FROM stop_times x JOIN stops s2
                   ON s2.feed=x.feed AND s2.stop_id=x.stop_id
                  WHERE x.feed=st.feed AND x.trip_id=st.trip_id
@@ -185,18 +265,18 @@ def _board(feed: str, stop_id: str, kind: str, minutes: int, limit: int):
                   ON s3.feed=y.feed AND s3.stop_id=y.stop_id
                  WHERE y.feed=st.feed AND y.trip_id=st.trip_id
                  ORDER BY y.seq ASC LIMIT 1) AS origin
+               {rt_cols}
         FROM stop_times st
         JOIN trips t ON t.feed=st.feed AND t.trip_id=st.trip_id
-        JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id AND sd.day=:day
+        JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id
+                          AND sd.day BETWEEN :day - 1 AND :day
         LEFT JOIN routes r ON r.feed=t.feed AND r.route_id=t.route_id
-        LEFT JOIN rt_trip rt ON rt.feed=t.feed AND rt.trip_id=t.trip_id
-        LEFT JOIN rt_stop_update su ON su.feed=t.feed AND su.trip_id=t.trip_id
-                                    AND su.stop_id=st.stop_id
-        LEFT JOIN rt_vehicle v ON v.feed=t.feed AND v.trip_id=t.trip_id
-        LEFT JOIN rt_fleet fl ON fl.feed=t.feed AND fl.trip_id=t.trip_id
+        LEFT JOIN trip_flags tf ON tf.feed=t.feed AND tf.trip_id=t.trip_id
+        {rt_join}
         WHERE st.feed=:feed AND st.stop_id=:stop
-          AND st.{col} BETWEEN :lo AND :hi
-        ORDER BY st.{col}
+          AND st.{col} + (sd.day - :day) * 86400 BETWEEN :lo AND :hi
+          {semi_sql}
+        ORDER BY eff_secs
         LIMIT :lim
     """)
     with engine.connect() as c:
@@ -206,14 +286,17 @@ def _board(feed: str, stop_id: str, kind: str, minutes: int, limit: int):
     out = []
     for r in rows:
         # precedencia: observado (flota) > predicción parada > predicción viaje
-        if r["fleet_delay"] is not None:
-            delay, source = r["fleet_delay"] * 60, "observed"
-        elif r["stop_delay"] is not None:
-            delay, source = r["stop_delay"], "stop"
-        else:
-            delay, source = r["trip_delay"], ("trip" if r["trip_delay"] is not None else None)
-        sched_epoch = midnight + (r["sched"] or 0)
-        platform = r["fleet_next_platform"] or r["fleet_platform"] or r["vp_platform"]
+        delay, source = None, None
+        if with_rt:
+            if r["fleet_delay"] is not None:
+                delay, source = r["fleet_delay"] * 60, "observed"
+            elif r["stop_delay"] is not None:
+                delay, source = r["stop_delay"], "stop"
+            elif r["trip_delay"] is not None:
+                delay, source = r["trip_delay"], "trip"
+        sched_epoch = midnight + int(r["eff_secs"])
+        platform = ((r.get("fleet_next_platform") or r.get("fleet_platform"))
+                    or r.get("vp_platform")) if with_rt else None
         out.append({
             "trip_id": r["trip_id"], "feed": feed,
             "line": (r["line"] or "").strip() or None,
@@ -224,9 +307,11 @@ def _board(feed: str, stop_id: str, kind: str, minutes: int, limit: int):
             "delay_sec": delay,
             "realtime": source is not None,
             "delay_source": source,
-            "cancelled": r["sched_rel"] == "CANCELED",
+            "cancelled": with_rt and r["sched_rel"] == "CANCELED",
             "platform": platform,
-            "vehicle_status": r["vp_status"],
+            "vehicle_status": r.get("vp_status") if with_rt else None,
+            "semidirect": bool(r["semidirect"]) if r["semidirect"] is not None else False,
+            "skipped_stops": r["skipped"] or 0,
         })
     return out
 
@@ -243,18 +328,37 @@ def station(feed: str, stop_id: str):
             "network": FEED_LABELS.get(feed, feed), **dict(s)}
 
 
+def _feed_ts(feeds: set[str]):
+    """Timestamps del feed RT por red para frescura real (no hora del fetch)."""
+    keys = [f"rt_trip_updates_{f}" for f in feeds] + \
+           (["rt_fleet_cer"] if "cer" in feeds else [])
+    with engine.connect() as c:
+        rows = c.execute(text("SELECT key,value FROM meta WHERE key = ANY(:k)"),
+                         {"k": keys}).all()
+    return {k: int(v) for k, v in rows}
+
+
 @v1.get("/stations/board")
 def station_board_multi(
         stops: str = Query(description="lista 'feed:stop_id' separada por comas"),
         kind: str = Query("departures", pattern="^(departures|arrivals)$"),
-        minutes: int = Query(180, ge=15, le=720),
-        limit: int = Query(60, ge=1, le=200)):
-    """Tablero combinado: admite varias paradas (estación física en ambas redes)."""
+        minutes: int = Query(180, ge=15, le=1440),
+        limit: int = Query(60, ge=1, le=200),
+        date: str | None = Query(None, description="YYYY-MM-DD (por defecto hoy)"),
+        time_s: str | None = Query(None, alias="time", description="HH:MM local"),
+        semidirect: bool = Query(False, description="solo servicios que omiten >=2 paradas")):
+    """Tablero combinado: admite varias paradas (estación física en ambas redes).
+    En fechas ≠ hoy devuelve solo horario programado (nunca retrasos de hoy)."""
+    pairs = _parse_stops_param(stops)
+    day, lo, hi, is_today = _window(date, time_s, minutes)
     items = []
-    for feed, sid in _parse_stops_param(stops):
-        items += _board(feed, sid, kind, minutes, limit)
+    for feed, sid in pairs:
+        items += _board(feed, sid, kind, lo, hi, day, is_today, limit,
+                        only_semidirect=semidirect)
     items.sort(key=lambda i: i["estimated"])
-    return {"kind": kind, "items": items[:limit]}
+    return {"kind": kind, "items": items[:limit], "date": day.isoformat(),
+            "scheduled_only": not is_today,
+            "feed_ts": _feed_ts({f for f, _ in pairs})}
 
 
 @v1.get("/stations/sitemap")
@@ -276,86 +380,131 @@ def stations_sitemap(limit: int = Query(600, ge=1, le=2000)):
 @v1.get("/stations/{feed}/{stop_id}/board")
 def station_board(feed: str, stop_id: str,
                   kind: str = Query("departures", pattern="^(departures|arrivals)$"),
-                  minutes: int = Query(120, ge=15, le=720),
-                  limit: int = Query(60, ge=1, le=200)):
-    return {"kind": kind, "items": _board(feed, stop_id, kind, minutes, limit)}
+                  minutes: int = Query(120, ge=15, le=1440),
+                  limit: int = Query(60, ge=1, le=200),
+                  date: str | None = None,
+                  time_s: str | None = Query(None, alias="time"),
+                  semidirect: bool = False):
+    day, lo, hi, is_today = _window(date, time_s, minutes)
+    items = _board(feed, stop_id, kind, lo, hi, day, is_today, limit,
+                   only_semidirect=semidirect)
+    return {"kind": kind, "items": items, "date": day.isoformat(),
+            "scheduled_only": not is_today,
+            "feed_ts": _feed_ts({feed})}
 
 
 @v1.get("/journeys")
-def journeys(frm: str = Query(alias="from"), to: str = Query(), limit: int = 30):
-    """from/to como 'feed:stop_id' o stop_id suelto (se prueban ambas redes
-    si comparten feed)."""
+def journeys(frm: str = Query(alias="from"), to: str = Query(),
+             limit: int = Query(30, ge=1, le=100),
+             date: str | None = Query(None, description="YYYY-MM-DD (hoy por defecto)"),
+             time_s: str | None = Query(None, alias="time", description="HH:MM local"),
+             hours: int = Query(8, ge=1, le=24),
+             semidirect: bool = Query(False, description="solo semidirectos (omiten >=2 paradas)"),
+             response: Response = None):
+    """Trayectos directos origen→destino. `date`/`time` permiten planificar:
+    en fechas ≠ hoy devuelve horario programado sin retrasos.
+
+    Compatibilidad: devuelve una lista (como siempre). La metadata va en
+    cabeceras X-Date, X-Scheduled-Only, X-Feed-Ts.
+    """
     f_pairs = _parse_stops_param(frm)
     t_pairs = _parse_stops_param(to)
     combos = [(f, t) for f in f_pairs for t in t_pairs if f[0] == t[0]]
     if not combos:
         raise HTTPException(400, "origen y destino deben compartir red (cer|ld)")
-    _, secs_now, day = _now()
+    day, lo, hi, is_today = _window(date, time_s, hours * 60)
     midnight = _local_midnight(day)
-    items = []
-    for (ffeed, fstop), (_, tstop) in combos:
-        sql = text("""
-            SELECT so.dep AS dep, sd2.arr AS arr, t.trip_id, t.train_number,
-                   r.short_name AS line, rt.delay AS trip_delay,
-                   s1.delay AS dep_delay, s2.delay AS arr_delay,
-                   fl.delay_min AS fleet_delay
-            FROM stop_times so
-            JOIN stop_times sd2 ON sd2.feed=so.feed AND sd2.trip_id=so.trip_id AND sd2.seq>so.seq
-            JOIN trips t ON t.feed=so.feed AND t.trip_id=so.trip_id
-            JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id AND sd.day=:day
-            LEFT JOIN routes r ON r.feed=t.feed AND r.route_id=t.route_id
+    rt_join = "" if not is_today else """
             LEFT JOIN rt_trip rt ON rt.feed=t.feed AND rt.trip_id=t.trip_id
             LEFT JOIN rt_stop_update s1 ON s1.feed=t.feed AND s1.trip_id=t.trip_id AND s1.stop_id=so.stop_id
             LEFT JOIN rt_stop_update s2 ON s2.feed=t.feed AND s2.trip_id=t.trip_id AND s2.stop_id=sd2.stop_id
             LEFT JOIN rt_fleet fl ON fl.feed=t.feed AND fl.trip_id=t.trip_id
-            WHERE so.feed=:feed AND so.stop_id=:fstop AND sd2.stop_id=:tstop
-              AND so.dep BETWEEN :lo AND :hi
-            ORDER BY so.dep LIMIT :lim
+    """
+    rt_cols = "" if not is_today else """,
+                   rt.delay AS trip_delay, s1.delay AS dep_delay, s2.delay AS arr_delay,
+                   rt.sched_rel, fl.delay_min AS fleet_delay"""
+    items = []
+    semi_sql = "AND tf.semidirect=1" if semidirect else ""
+    for (ffeed, fstop), (_, tstop) in combos:
+        sql = text(f"""
+            SELECT so.dep + (sd.day - :day) * 86400 AS dep_eff,
+                   sd2.arr + (sd.day - :day) * 86400 AS arr_eff,
+                   t.trip_id, t.train_number, r.short_name AS line,
+                   tf.semidirect, tf.skipped{rt_cols}
+            FROM stop_times so
+            JOIN stop_times sd2 ON sd2.feed=so.feed AND sd2.trip_id=so.trip_id
+                               AND sd2.seq>so.seq AND sd2.stop_id=:tstop
+            JOIN trips t ON t.feed=so.feed AND t.trip_id=so.trip_id
+            JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id
+                              AND sd.day BETWEEN :day - 1 AND :day
+            LEFT JOIN routes r ON r.feed=t.feed AND r.route_id=t.route_id
+            LEFT JOIN trip_flags tf ON tf.feed=t.feed AND tf.trip_id=t.trip_id
+            {rt_join}
+            WHERE so.feed=:feed AND so.stop_id=:fstop
+              AND so.dep + (sd.day - :day) * 86400 BETWEEN :lo AND :hi
+              {semi_sql}
+            ORDER BY dep_eff LIMIT :lim
         """)
         with engine.connect() as c:
             rows = c.execute(sql, {"feed": ffeed, "fstop": fstop, "tstop": tstop,
-                                   "day": day, "lo": secs_now - 300,
-                                   "hi": secs_now + 8 * 3600, "lim": limit}).mappings().all()
+                                   "day": day, "lo": lo, "hi": hi,
+                                   "lim": limit}).mappings().all()
         for r in rows:
-            if r["fleet_delay"] is not None:
-                delay = r["fleet_delay"] * 60
-            else:
-                delay = r["arr_delay"] if r["arr_delay"] is not None else r["trip_delay"]
-            dep_d = r["dep_delay"] if r["dep_delay"] is not None else delay
-            arr_d = r["arr_delay"] if r["arr_delay"] is not None else delay
+            delay = dep_d = arr_d = None
+            cancelled = False
+            if is_today:
+                if r["fleet_delay"] is not None:
+                    delay = r["fleet_delay"] * 60
+                else:
+                    delay = r["arr_delay"] if r["arr_delay"] is not None else r["trip_delay"]
+                dep_d = r["dep_delay"] if r["dep_delay"] is not None else delay
+                arr_d = r["arr_delay"] if r["arr_delay"] is not None else delay
+                cancelled = r["sched_rel"] == "CANCELED"
             items.append({
                 "trip_id": r["trip_id"], "feed": ffeed,
                 "line": (r["line"] or "").strip() or None,
                 "train_number": r["train_number"],
-                "dep_scheduled": midnight + (r["dep"] or 0),
-                "arr_scheduled": midnight + (r["arr"] or 0),
-                "dep_estimated": midnight + (r["dep"] or 0) + (dep_d or 0),
-                "arr_estimated": midnight + (r["arr"] or 0) + (arr_d or 0),
+                "dep_scheduled": midnight + int(r["dep_eff"]),
+                "arr_scheduled": midnight + int(r["arr_eff"]),
+                "dep_estimated": midnight + int(r["dep_eff"]) + (dep_d or 0),
+                "arr_estimated": midnight + int(r["arr_eff"]) + (arr_d or 0),
                 "delay_sec": delay,
                 "realtime": delay is not None,
+                "cancelled": cancelled,
+                "semidirect": bool(r["semidirect"]) if r["semidirect"] is not None else False,
+                "skipped_stops": r["skipped"] or 0,
             })
     items.sort(key=lambda i: i["dep_estimated"])
+    response.headers["X-Date"] = day.isoformat()
+    response.headers["X-Scheduled-Only"] = "0" if is_today else "1"
+    ts = _feed_ts({f for f, _ in combos})
+    response.headers["X-Feed-Ts"] = ",".join(
+        k.replace("rt_trip_updates_", "").replace("rt_fleet_", "") + f":{v}"
+        for k, v in ts.items())
     return items[:limit]
 
 
 @v1.get("/trains/by-number/{number}")
-def trains_by_number(number: str):
-    """Instancias de hoy para un número comercial de tren (p.ej. 06180)."""
+def trains_by_number(number: str, date: str | None = None):
+    """Instancias de un número comercial de tren en un día (hoy por defecto)."""
     num = re.sub(r"\D", "", number)
     if not num:
         raise HTTPException(400, "número inválido")
-    _, _, day = _now()
+    day = _parse_date(date) or _now()[2]
     with engine.connect() as c:
         rows = c.execute(text("""
-            SELECT t.feed, t.trip_id, t.train_number, r.short_name AS line,
+            SELECT DISTINCT t.feed, t.trip_id, t.train_number, r.short_name AS line,
                    rt.delay, fl.delay_min AS fleet_delay
             FROM trips t
             JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id AND sd.day=:day
             LEFT JOIN routes r ON r.feed=t.feed AND r.route_id=t.route_id
             LEFT JOIN rt_trip rt ON rt.feed=t.feed AND rt.trip_id=t.trip_id
+                AND :today = TRUE
             LEFT JOIN rt_fleet fl ON fl.feed=t.feed AND fl.trip_id=t.trip_id
+                AND :today = TRUE
             WHERE t.train_number = :n
-            LIMIT 10"""), {"day": day, "n": num}).mappings().all()
+            LIMIT 10"""),
+            {"day": day, "n": num, "today": day == _now()[2]}).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -374,13 +523,15 @@ def train(feed: str, trip_id: str):
         stops = c.execute(text("""
             SELECT st.seq, st.stop_id, s.name, st.arr, st.dep,
                    su.delay AS stop_delay, su.time AS stop_time,
-                   rt.delay AS trip_delay, fl.delay_min AS fleet_delay
+                   rt.delay AS trip_delay, fl.delay_min AS fleet_delay,
+                   tf.semidirect, tf.skipped
             FROM stop_times st
             JOIN stops s ON s.feed=st.feed AND s.stop_id=st.stop_id
             LEFT JOIN rt_stop_update su ON su.feed=st.feed AND su.trip_id=st.trip_id
                                         AND su.stop_id=st.stop_id
             LEFT JOIN rt_trip rt ON rt.feed=st.feed AND rt.trip_id=st.trip_id
             LEFT JOIN rt_fleet fl ON fl.feed=st.feed AND fl.trip_id=st.trip_id
+            LEFT JOIN trip_flags tf ON tf.feed=st.feed AND tf.trip_id=st.trip_id
             WHERE st.feed=:f AND st.trip_id=:t ORDER BY st.seq"""),
             {"f": feed, "t": trip_id}).mappings().all()
         veh = c.execute(text("""
@@ -400,12 +551,19 @@ def train(feed: str, trip_id: str):
     midnight = _local_midnight(today)
     out_stops = []
     for r in stops:
-        if r["fleet_delay"] is not None:
-            delay = r["fleet_delay"] * 60
-        elif r["stop_delay"] is not None:
-            delay = r["stop_delay"]
+        # fuente del retraso por parada:
+        #  'stop'     = predicción RT específica de esta parada
+        #  'trip'     = predicción a nivel de viaje (propagada)
+        #  'observed' = retraso observado del visor, válido en la posición
+        #              actual del tren; en el resto es extrapolación
+        if r["stop_delay"] is not None:
+            delay, src = r["stop_delay"], "stop"
+        elif r["fleet_delay"] is not None:
+            delay, src = r["fleet_delay"] * 60, "observed"
+        elif r["trip_delay"] is not None:
+            delay, src = r["trip_delay"], "trip"
         else:
-            delay = r["trip_delay"]
+            delay, src = None, None
         base = r["arr"] if r["arr"] is not None else r["dep"]
         out_stops.append({
             "seq": r["seq"], "stop_id": r["stop_id"], "name": r["name"],
@@ -413,12 +571,19 @@ def train(feed: str, trip_id: str):
             "dep_scheduled": midnight + r["dep"] if r["dep"] is not None else None,
             "est_time": r["stop_time"]
                 or (midnight + base + (delay or 0) if base is not None else None),
-            "delay_sec": delay, "realtime": r["stop_delay"] is not None,
+            "delay_sec": delay,
+            "realtime": r["stop_delay"] is not None,
+            "delay_source": src,
         })
+    flags = None
+    if stops:
+        flags = {"semidirect": bool(stops[0]["semidirect"]),
+                 "skipped_stops": stops[0]["skipped"] or 0}
     return {"trip": dict(t), "feed": feed,
             "rt": dict(rt) if rt else None,
             "fleet": dict(fl) if fl else None,
             "vehicle": dict(veh) if veh else None,
+            "flags": flags,
             "stops": out_stops}
 
 

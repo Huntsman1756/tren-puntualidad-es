@@ -146,6 +146,24 @@ class Meta(Base):
     value = Column(Text)
 
 
+class TripFlag(Base):
+    """Heurística calculada en carga estática: patrón de paradas del viaje.
+
+    `semidirect` = el viaje comparte origen/destino con el patrón canónico
+    (modal) de su ruta pero omite >=2 paradas interiores. No es una marca
+    oficial de "CIVIS": Renfe no publica ese atributo en GTFS.
+    """
+    __tablename__ = "trip_flags"
+    feed = Column(String(8), primary_key=True)
+    trip_id = Column(String(64), primary_key=True)
+    n_stops = Column(Integer)
+    semidirect = Column(Integer, default=0)   # 0/1
+    skipped = Column(Integer, default=0)      # paradas interiores omitidas
+
+
+Index("ix_trip_flags_semidirect", TripFlag.feed, TripFlag.semidirect)
+
+
 class RtFleet(Base):
     """Estado observado por tren desde el visor oficial (flota.json)."""
     __tablename__ = "rt_fleet"

@@ -8,7 +8,7 @@ let data;
 try { data = await api.train(feed, decodeURIComponent(id)); }
 catch { return Astro.redirect('/'); }
 
-const { trip, rt, vehicle, fleet, stops } = data;
+const { trip, rt, vehicle, fleet, stops, flags } = data;
 const title = trip.train_number ? `Tren ${trip.train_number}` : `Viaje ${trip.trip_id}`;
 const effDelay = fleet?.delay_min != null ? fleet.delay_min * 60 : rt?.delay;
 ---
@@ -19,6 +19,7 @@ const effDelay = fleet?.delay_min != null ? fleet.delay_min * 60 : rt?.delay;
     {trip.line && <>Línea {trip.line} · </>}{FEED_NAME[feed] || feed}
     {(vehicle?.platform || fleet?.platform) && <> · Vía {fleet?.platform || vehicle?.platform}</>}
     {fleet?.next_platform && fleet.next_platform !== fleet.platform && <> · próxima vía {fleet.next_platform}</>}
+    {flags?.semidirect && <> · <span class="badge semi">semidirecto — omite {flags.skipped_stops} paradas</span></>}
   </p>
 
   {rt?.sched_rel === 'CANCELED' && <div class="card alert"><strong>Tren suprimido.</strong></div>}
@@ -39,7 +40,10 @@ const effDelay = fleet?.delay_min != null ? fleet.delay_min * 60 : rt?.delay;
               <td><a href={`/estacion/${feed}:${s.stop_id}`}>{s.name}</a></td>
               <td>{fmtTime(s.arr_scheduled || s.dep_scheduled)}</td>
               <td>{fmtTime(s.est_time)}</td>
-              <td><span class={`badge ${d.cls}`}>{s.realtime ? d.text : 'prog.'}</span></td>
+              <td><span class={`badge ${d.cls}`}>{s.delay_source === 'stop' ? `${d.text} · est.`
+                : s.delay_source === 'observed' ? `${d.text} · obs.`
+                : s.delay_source === 'trip' ? `${d.text} · est.`
+                : 'prog.'}</span></td>
             </tr>
           );
         })}

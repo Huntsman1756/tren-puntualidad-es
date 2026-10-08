@@ -1,6 +1,7 @@
 ---
 import Base from '../../layouts/Base.astro';
 import Board from '../../components/Board.svelte';
+import FavStar from '../../components/FavStar.svelte';
 import { api } from '../../lib/api';
 import { FEED_NAME } from '../../lib/format';
 
@@ -8,16 +9,23 @@ const key = Astro.params.key || '';
 const pairs = key.split(',').map((p) => p.trim().split(':')).filter((p) => p.length === 2);
 if (!pairs.length) return Astro.redirect('/');
 
+const date = Astro.url.searchParams.get('date') || '';
+const time = Astro.url.searchParams.get('time') || '';
+
 let infos: any[] = [];
 let board: any = { items: [] };
 let alerts: any[] = [];
 let punct: any = null;
+let coverage: any = null;
 try {
   infos = (await Promise.all(
     pairs.map(([f, s]) => api.station(f, s).catch(() => null)),
   )).filter(Boolean);
   if (!infos.length) return Astro.redirect('/');
-  board = await api.board(key, 'departures', 180);
+  [board, coverage] = await Promise.all([
+    api.board(key, 'departures', 180, date || undefined, time || undefined),
+    api.coverage().catch(() => null),
+  ]);
   const alertLists = await Promise.all(
     infos.map((i) => api.alerts(i.feed, i.stop_id).catch(() => [])),
   );
@@ -30,22 +38,37 @@ try {
 const name = infos[0].name;
 const networks = [...new Set(infos.map((i) => FEED_NAME[i.feed] || i.network))];
 const canonical = `/estacion/${key}`;
+const maxDate = coverage
+  ? Object.values(coverage.feeds || {}).map((f: any) => f.last_day).sort().reverse()[0]
+  : undefined;
 ---
 <Base title={`${name} — horarios y retrasos | Trenes a tiempo`}
     description={`Próximas salidas y llegadas en ${name}: horarios programados, estimaciones en tiempo real, retrasos y avisos de Renfe.`}
     canonical={canonical}>
   <nav class="breadcrumb"><a href="/">← Buscador</a></nav>
-  <h1>{name}</h1>
+  <div class="title-row">
+    <h1>{name}</h1>
+    <FavStar client:load k={key} name={name} />
+  </div>
   <p class="muted">{networks.join(' + ')}</p>
 
   {alerts.map((a) => (
-    <div class="card alert">
+    <div class="card alert" role="alert">
       <strong>Aviso:</strong> {a.text || 'Incidencia notificada por Renfe'}
     </div>
   ))}
 
+  <form class="dtbar card tight" method="get" action={`/estacion/${key}`}>
+    <label>Fecha <input type="date" name="date" value={date} min={coverage?.today}
+      max={maxDate} /></label>
+    <label>Hora <input type="time" name="time" value={time} /></label>
+    <button type="submit">Consultar</button>
+    {(date || time) && <a class="today" href={`/estacion/${key}`}>Ahora</a>}
+  </form>
+
   <div class="card">
-    <Board client:load stops={key} initialItems={board.items} initialKind="departures" />
+    <Board client:load stops={key} initialItems={board.items}
+      initialMeta={board} initialKind="departures" date={date} time={time} />
   </div>
 
   {punct && punct.observations > 0 && (
@@ -65,3 +88,14 @@ const canonical = `/estacion/${key}`;
     </div>
   )}
 </Base>
+<style>
+  .title-row { display: flex; align-items: baseline; gap: .5rem; }
+  .title-row h1 { margin-bottom: .2rem; }
+  .dtbar { display: flex; gap: .7rem; align-items: end; flex-wrap: wrap; font-size: .85rem; }
+  .dtbar label { display: flex; flex-direction: column; gap: .2rem; color: var(--muted); }
+  .dtbar input { font-size: .9rem; padding: .4rem .5rem; }
+  .dtbar button { padding: .45rem .9rem; border-radius: 8px; border: 1px solid var(--border);
+                  background: var(--accent); color: var(--accent-fg); font-weight: 600;
+                  cursor: pointer; }
+  .dtbar .today { align-self: center; font-size: .85rem; }
+</style>

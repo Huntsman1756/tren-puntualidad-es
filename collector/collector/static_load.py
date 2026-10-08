@@ -102,7 +102,63 @@ def load_feed(feed: str, path: str, conn):
 
     conn.execute(text("ANALYZE stop_times"))
     conn.execute(text("ANALYZE trips"))
+    counts["trip_flags"] = compute_trip_flags(conn, feed)
     return counts
+
+
+def compute_trip_flags(conn, feed: str) -> int:
+    """Marca viajes semidirectos: mismo origen/destino que el patrón modal
+    de su ruta pero omitiendo >=2 paradas interiores (subsecuencia).
+
+    No es una marca oficial: Renfe no publica CIVIS en GTFS; es una
+    inferencia verificable sobre stop_times.
+    """
+    conn.execute(text("DELETE FROM trip_flags WHERE feed=:f"), {"f": feed})
+    route_ids = [r[0] for r in conn.execute(text(
+        "SELECT DISTINCT route_id FROM trips WHERE feed=:f"), {"f": feed})]
+    out = []
+    for rid in route_ids:
+        pats = conn.execute(text("""
+            SELECT st.trip_id, array_agg(st.stop_id ORDER BY st.seq) AS pat
+            FROM stop_times st
+            JOIN trips t ON t.feed=st.feed AND t.trip_id=st.trip_id
+            WHERE st.feed=:f AND t.route_id=:rid
+            GROUP BY st.trip_id"""), {"f": feed, "rid": rid}).all()
+
+        # agrupar por (origen, destino) — variantes de ramal son grupos distintos
+        groups: dict = {}
+        for tid, pat in pats:
+            if not pat:
+                continue
+            groups.setdefault((pat[0], pat[-1]), {}).setdefault(tuple(pat), []).append(tid)
+
+        for _ends, pat_map in groups.items():
+            lens = {tid: len(pat) for pat, tids in pat_map.items() for tid in tids}
+            for tid, (semi, skipped) in classify_patterns(pat_map).items():
+                out.append((feed, tid, lens[tid], semi, skipped))
+    if out:
+        _copy_rows(conn, "trip_flags",
+                   ["feed", "trip_id", "n_stops", "semidirect", "skipped"], out)
+    return len(out)
+
+
+def classify_patterns(pat_map: dict) -> dict:
+    """pat_map: {pattern_tuple: [trip_ids]} de un mismo (ruta,origen,destino).
+    Devuelve {trip_id: (semidirect, skipped)}.
+
+    Un viaje es semidirecto si su patrón es subsecuencia estricta del patrón
+    modal y omite >=2 paradas interiores. Nunca es marca oficial de CIVIS."""
+    canon_pat, _ = max(pat_map.items(), key=lambda kv: (len(kv[1]), len(kv[0])))
+    canon_pos = {s: i for i, s in enumerate(canon_pat)}
+    canon_interior = set(canon_pat[1:-1])
+    result = {}
+    for pat, tids in pat_map.items():
+        pos = [canon_pos[s] for s in pat if s in canon_pos]
+        is_subseq = len(pos) == len(pat) and pos == sorted(pos)
+        skipped = len(canon_interior - set(pat)) if is_subseq and pat != canon_pat else 0
+        for tid in tids:
+            result[tid] = (1 if skipped >= 2 else 0, skipped)
+    return result
 
 
 def _f(v):

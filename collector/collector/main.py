@@ -12,7 +12,7 @@ from collector.config import (
     POLL_TRIP_UPDATES,
     POLL_VEHICLE_POSITIONS,
 )
-from collector.db import wait_and_create
+from collector.db import engine, get_meta, set_meta, wait_and_create
 from collector.gtfsutil import TZINFO
 from collector.realtime import (
     poll_alerts,
@@ -21,7 +21,7 @@ from collector.realtime import (
     poll_vehicle_positions,
     prune_history,
 )
-from collector.static_load import maybe_reload
+from collector.static_load import compute_trip_flags, maybe_reload
 
 logging.basicConfig(
     level=logging.INFO,
@@ -116,6 +116,23 @@ async def main():
             await asyncio.to_thread(maybe_reload, feed, True)
         except Exception:
             log.exception("initial static load %s failed", feed)
+    # backfill de trip_flags si el estático ya estaba cargado antes de existir
+    def _backfill_flags():
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            for feed in GTFS_STATIC:
+                if get_meta(conn, f"trip_flags_{feed}"):
+                    continue
+                n = conn.execute(text(
+                    "SELECT count(*) FROM trips WHERE feed=:f"), {"f": feed}).scalar()
+                if n:
+                    k = compute_trip_flags(conn, feed)
+                    set_meta(conn, f"trip_flags_{feed}", k)
+                    log.info("trip_flags %s: %d viajes clasificados", feed, k)
+    try:
+        await asyncio.to_thread(_backfill_flags)
+    except Exception:
+        log.exception("trip_flags backfill failed")
     await asyncio.gather(
         rt_trip_loop(), rt_vehicle_loop(), fleet_loop(), alerts_loop(),
         static_loop(), maintenance_loop(),

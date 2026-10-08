@@ -1,76 +1,157 @@
 ---
 import Base from '../layouts/Base.astro';
+import SaveJourney from '../components/SaveJourney.svelte';
 import { api } from '../lib/api';
-import { fmtDelay, fmtTime } from '../lib/format';
+import { fmtDelay, fmtTime, fmtDuration, fmtDate } from '../lib/format';
 
 const from = Astro.url.searchParams.get('from') || '';
 const to = Astro.url.searchParams.get('to') || '';
+const date = Astro.url.searchParams.get('date') || '';
+const time = Astro.url.searchParams.get('time') || '';
+const semidirect = Astro.url.searchParams.get('semidirect') === '1';
 
 let items: any[] = [];
 let error: string | null = null;
 let fromName = 'Origen', toName = 'Destino';
+let coverage: any = null;
+let feedTs: Record<string, number> = {};
+let scheduledOnly = false;
 if (from && to) {
   try {
     const fp = from.split(',')[0].split(':');
     const tp = to.split(',')[0].split(':');
-    [items, fromName, toName] = await Promise.all([
-      api.journeys(from, to),
+    const opts = {
+      date: date || undefined, time: time || undefined,
+      hours: date && !time ? 24 : undefined, semidirect: semidirect || undefined,
+    };
+    [items, fromName, toName, coverage] = await Promise.all([
+      api.journeys(from, to, opts),
       api.station(fp[0], fp[1]).then((s: any) => s.name).catch(() => fp[1]),
       api.station(tp[0], tp[1]).then((s: any) => s.name).catch(() => tp[1]),
+      api.coverage().catch(() => null),
     ]);
+    scheduledOnly = !!date && date !== coverage?.today;
   } catch (e) {
     error = 'No se ha podido cargar el trayecto.';
   }
 }
-const canonical = `/trayecto?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+const swapHref = `/trayecto?from=${encodeURIComponent(to)}&to=${encodeURIComponent(from)}`
+  + (date ? `&date=${date}` : '') + (time ? `&time=${time}` : '')
+  + (semidirect ? '&semidirect=1' : '');
+const qs = new URLSearchParams({ from, to });
+if (date) qs.set('date', date);
+if (time) qs.set('time', time);
+if (semidirect) qs.set('semidirect', '1');
+const canonical = `/trayecto?${qs}`;
+const maxDate = coverage
+  ? Object.values(coverage.feeds || {}).map((f: any) => f.last_day).sort().reverse()[0]
+  : undefined;
 ---
 <Base title={`${fromName} → ${toName} — horarios y retrasos`}
-    description={`Próximos trenes directos de ${fromName} a ${toName}: hora programada, estimada y retrasos en tiempo real.`}
+    description={`Trenes directos de ${fromName} a ${toName}: hora programada, estimada, retrasos en tiempo real y servicios semidirectos.`}
     canonical={canonical}>
   <nav class="breadcrumb"><a href="/">← Buscador</a></nav>
-  <h1>{fromName} → {toName}</h1>
+  <div class="head">
+    <h1>{fromName} → {toName}</h1>
+    <a class="swaplink" href={swapHref} title="Trayecto inverso">⇅ vuelta</a>
+  </div>
 
-  {error && <div class="card alert">{error}</div>}
+  <form class="dtbar card tight" method="get" action="/trayecto">
+    <input type="hidden" name="from" value={from} />
+    <input type="hidden" name="to" value={to} />
+    <label>Fecha <input type="date" name="date" value={date} min={coverage?.today} max={maxDate} /></label>
+    <label>Desde <input type="time" name="time" value={time} /></label>
+    <label class="chk"><input type="checkbox" name="semidirect" value="1"
+      checked={semidirect} /> semidirectos</label>
+    <button type="submit">Consultar</button>
+  </form>
+
+  {scheduledOnly && (
+    <p class="card tight muted sched-note">
+      Horario programado del {fmtDate(items[0]?.dep_scheduled)} — sin datos en tiempo
+      real para fechas futuras.</p>
+  )}
+
+  {error && <div class="card alert" role="alert">{error}</div>}
   {!error && items.length === 0 && (
-    <div class="card muted">No hay trenes directos en las próximas 8 horas para este trayecto.
-      Solo se muestran servicios sin transbordo.</div>
+    <div class="card muted">
+      No hay trenes directos{semidirect ? ' semidirectos' : ''} en la ventana consultada.
+      Solo se muestran servicios sin transbordo{semidirect ? '' : ' — prueba a quitar el filtro'}.
+    </div>
   )}
 
   {items.length > 0 && (
     <div class="card">
-      <table class="board">
-        <thead>
-          <tr><th>Salida</th><th>Llegada</th><th>Línea</th>
-              <th class="hide-sm">Tren</th><th>Estado</th></tr>
-        </thead>
-        <tbody>
-          {items.map((j: any) => {
-            const d = fmtDelay(j.delay_sec);
-            return (
-              <tr>
-                <td>
-                  <strong>{fmtTime(j.dep_scheduled)}</strong>
-                  {j.realtime && j.dep_estimated !== j.dep_scheduled && (
-                    <><br /><span class="muted">→ {fmtTime(j.dep_estimated)}</span></>
-                  )}
-                </td>
-                <td>
-                  {fmtTime(j.arr_scheduled)}
-                  {j.realtime && j.arr_estimated !== j.arr_scheduled && (
-                    <><br /><span class="muted">→ {fmtTime(j.arr_estimated)}</span></>
-                  )}
-                </td>
-                <td>{j.line ? <span class="line-tag">{j.line}</span> : '—'}</td>
-                <td class="hide-sm">
-                  <a href={`/tren/${j.feed}/${encodeURIComponent(j.trip_id)}`}>{j.train_number || j.trip_id}</a>
-                </td>
-                <td><span class={`badge ${j.realtime ? d.cls : 'nodata'}`}>
-                  {j.realtime ? d.text : 'programado'}</span></td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div class="jhead">
+        <SaveJourney client:load fromKey={from} fromName={fromName} toKey={to}
+          toName={toName} semidirect={semidirect} />
+        <span class="muted count">{items.length} trenes</span>
+      </div>
+      <div class="jlist">
+        {items.map((j: any) => {
+          const d = fmtDelay(j.delay_sec);
+          const late = j.realtime && j.arr_estimated !== j.arr_scheduled;
+          return (
+            <a class={`jrow ${j.cancelled ? 'cancelled' : ''}`}
+               href={`/tren/${j.feed}/${encodeURIComponent(j.trip_id)}`}>
+              <div class="jtimes">
+                <span class="t">{fmtTime(j.dep_scheduled)}</span>
+                <span class="arrow">→</span>
+                <span class="t">{fmtTime(j.arr_scheduled)}</span>
+                {late && <span class="est">→ {fmtTime(j.arr_estimated)}</span>}
+              </div>
+              <div class="jmeta">
+                {j.line ? <span class="line-tag">{j.line}</span> : <span />}
+                <span class="muted dur">{fmtDuration(j.dep_scheduled, j.arr_scheduled)}</span>
+                {j.semidirect && <span class="badge semi">omite {j.skipped_stops}</span>}
+                <span class="muted tnum">{j.train_number}</span>
+                <span class={`badge ${j.realtime ? d.cls : 'nodata'}`}>
+                  {j.cancelled ? 'suprimido' : j.realtime ? d.text : 'prog.'}
+                </span>
+              </div>
+            </a>
+          );
+        })}
+      </div>
+      <p class="muted legend">Toca un tren para ver su recorrido completo.
+        prog. = horario programado (sin dato RT).</p>
     </div>
   )}
 </Base>
+<style>
+  .head { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; }
+  .head h1 { margin-bottom: .2rem; font-size: 1.35rem; }
+  .swaplink { font-size: .85rem; white-space: nowrap; }
+  .dtbar { display: flex; gap: .7rem; align-items: end; flex-wrap: wrap; font-size: .85rem; }
+  .dtbar label { display: flex; flex-direction: column; gap: .2rem; color: var(--muted); }
+  .dtbar .chk { flex-direction: row; align-items: center; gap: .4rem; padding-bottom: .55rem; }
+  .dtbar .chk input { width: auto; accent-color: var(--accent); }
+  .dtbar input { font-size: .9rem; padding: .4rem .5rem; }
+  .dtbar button { padding: .45rem .9rem; border-radius: 8px; border: 1px solid var(--border);
+                  background: var(--accent); color: var(--accent-fg); font-weight: 600;
+                  cursor: pointer; }
+  .sched-note { font-size: .82rem; margin-top: .4rem; }
+  .jhead { display: flex; justify-content: space-between; align-items: center;
+           margin-bottom: .4rem; }
+  .count { font-size: .78rem; }
+  .jlist { display: flex; flex-direction: column; }
+  .jrow { display: flex; justify-content: space-between; gap: .8rem; align-items: center;
+          padding: .6rem .2rem; border-top: 1px solid var(--border); color: var(--text);
+          border-radius: 6px; }
+  .jrow:first-child { border-top: 0; }
+  .jrow:hover { background: var(--card2); }
+  .jtimes { display: flex; align-items: baseline; gap: .35rem; white-space: nowrap; }
+  .jtimes .t { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .jtimes .arrow { color: var(--muted); }
+  .jtimes .est { color: var(--warn); font-size: .85rem; }
+  .jmeta { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap;
+           justify-content: flex-end; }
+  .dur { font-size: .82rem; }
+  .tnum { font-size: .78rem; }
+  .cancelled { opacity: .55; }
+  .legend { font-size: .75rem; margin: .6rem 0 0; }
+  @media (max-width: 560px) {
+    .jrow { flex-direction: column; align-items: stretch; gap: .3rem; }
+    .jmeta { justify-content: flex-start; }
+  }
+</style>

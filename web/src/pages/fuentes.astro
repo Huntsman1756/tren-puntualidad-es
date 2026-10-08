@@ -42,6 +42,15 @@ import Base from '../layouts/Base.astro';
           llegadas observadas como hechos, solo estimaciones.</li>
       <li>La vía/andén solo se muestra cuando Renfe la publica.</li>
       <li>Los trayectos solo cubren servicios <strong>directos</strong> (sin transbordo).</li>
+      <li>La marca <strong>«semi»</strong> (semidirecto) es una inferencia sobre
+          <code>stop_times</code>: trenes que comparten origen y destino con el
+          patrón mayoritario de su línea pero omiten 2 o más paradas interiores.
+          Renfe <strong>no publica</strong> una marca oficial de CIVIS en sus GTFS;
+          por eso no etiquetamos nada como CIVIS confirmado.</li>
+      <li>Las consultas por fecha dependen de la cobertura del GTFS vigente
+          (Cercanías ~4 semanas, larga distancia ~6); fuera de cobertura no hay
+          resultados. En fechas futuras solo se muestra el <strong>horario
+          programado</strong>, nunca retrasos del día en curso.</li>
     </ul>
   </div>
 
