@@ -498,7 +498,8 @@ def station_punctuality(feed: str, stop_id: str, days: int = Query(7, ge=1, le=9
             JOIN trips t ON t.feed=st.feed AND t.trip_id=st.trip_id
             JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id
             WHERE st.feed=:f AND st.stop_id=:s
-              AND sd.day >= CURRENT_DATE - :days * INTERVAL '1 day'"""),
+              AND sd.day >= CURRENT_DATE - CAST(:days AS int) * INTERVAL '1 day'
+              AND sd.day <= CURRENT_DATE"""),
             {"f": feed, "s": stop_id, "days": days}).scalar()
     if not obs:
         return {"feed": feed, "stop_id": stop_id, "days": days,
