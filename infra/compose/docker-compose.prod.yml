@@ -4,6 +4,9 @@
 services:
   db:
     restart: unless-stopped
+    networks:
+      default:
+        aliases: [trenes-db]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - backups:/backups
@@ -15,6 +18,8 @@ services:
 
   collector:
     restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-renfe}:${POSTGRES_PASSWORD:-renfe}@trenes-db:5432/${POSTGRES_DB:-renfe}
     deploy:
       resources:
         limits:
@@ -23,11 +28,14 @@ services:
   api:
     restart: unless-stopped
     environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-renfe}:${POSTGRES_PASSWORD:-renfe}@trenes-db:5432/${POSTGRES_DB:-renfe}
       ALLOWED_ORIGINS: "https://${DOMAIN}"
       RATE_LIMIT_PER_MIN: "120"
     networks:
-      - default
-      - coolify
+      default:
+        aliases: [trenes-api]
+      coolify:
+        aliases: [trenes-api]
     labels:
       traefik.enable: "true"
       traefik.docker.network: "coolify"
@@ -44,7 +52,7 @@ services:
   web:
     restart: unless-stopped
     environment:
-      API_INTERNAL_URL: http://api:8000
+      API_INTERNAL_URL: http://trenes-api:8000
     networks:
       - default
       - coolify
@@ -80,7 +88,7 @@ services:
     volumes:
       - backups:/backups
     environment:
-      PGHOST: db
+      PGHOST: trenes-db
       PGUSER: ${POSTGRES_USER:-renfe}
       PGPASSWORD: ${POSTGRES_PASSWORD:-renfe}
       PGDATABASE: ${POSTGRES_DB:-renfe}
