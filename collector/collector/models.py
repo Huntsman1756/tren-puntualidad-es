@@ -3,6 +3,7 @@ from sqlalchemy import (
     BigInteger,
     Column,
     Date,
+    DateTime,
     Float,
     Index,
     Integer,
@@ -11,6 +12,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.sql import func
 
 
 class Base(DeclarativeBase):
@@ -162,6 +164,23 @@ class TripFlag(Base):
 
 
 Index("ix_trip_flags_semidirect", TripFlag.feed, TripFlag.semidirect)
+
+
+class PushSub(Base):
+    """Suscripción Web Push anónima. Sin cuentas: la clave es el endpoint
+    (opaco, controlado por el navegador). Borrado inmediato al darse de baja
+    o cuando el push devuelve 404/410."""
+    __tablename__ = "push_subs"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    endpoint = Column(Text, unique=True, nullable=False)
+    p256dh = Column(Text, nullable=False)
+    auth = Column(Text, nullable=False)
+    # config: {type: journey|station, from_key, to_key, station_key,
+    #          days[], from_time, to_time, threshold_min, min_interval_min}
+    config = Column(JSONB, nullable=False)
+    last_notify_key = Column(Text)
+    last_notify_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class RtFleet(Base):

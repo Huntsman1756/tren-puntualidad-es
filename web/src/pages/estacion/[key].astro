@@ -2,6 +2,7 @@
 import Base from '../../layouts/Base.astro';
 import Board from '../../components/Board.svelte';
 import FavStar from '../../components/FavStar.svelte';
+import AlertButton from '../../components/AlertButton.svelte';
 import { api } from '../../lib/api';
 import { FEED_NAME } from '../../lib/format';
 
@@ -51,6 +52,7 @@ const maxDate = coverage
     <FavStar client:load k={key} name={name} />
   </div>
   <p class="muted">{networks.join(' + ')}</p>
+  <AlertButton client:load cfg={{ type: 'station', station_key: key }} label={name} />
 
   {alerts.map((a) => (
     <div class="card alert" role="alert">

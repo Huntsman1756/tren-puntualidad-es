@@ -1,0 +1,62 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base title="Privacidad — Trenes a tiempo"
+    description="Política de privacidad: favoritos locales, notificaciones sin cuenta y datos mínimos.">
+  <h1>Privacidad</h1>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Qué guardamos y dónde</h2>
+    <ul>
+      <li><strong>Favoritos y trayectos</strong>: solo en tu navegador
+          (localStorage). No salen de tu dispositivo salvo que uses la
+          exportación JSON tú mismo.</li>
+      <li><strong>Tema claro/oscuro</strong>: localStorage, igual.</li>
+      <li><strong>Notificaciones push</strong>: si activas avisos, guardamos en
+          el servidor la URL de suscripción que genera tu navegador
+          (endpoint + claves p256dh/auth) y tu configuración (trayecto,
+          umbral, días y franja). <strong>No hay cuentas, correos ni
+          teléfonos</strong>. El endpoint es opaco y no identifica tu
+          identidad, aunque sí tu navegador concreto.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Notificaciones</h2>
+    <ul>
+      <li>Solo se envían dentro de los <strong>días y la franja horaria</strong>
+          que configures, y solo cuando un tren próximo acumula retraso
+          <strong>según datos en tiempo real</strong> — nunca por horario
+          programado sin confirmar.</li>
+      <li>Hay deduplicación por tren y día y un mínimo de 10 minutos entre
+          avisos por suscripción.</li>
+      <li>Darte de baja es inmediato desde el mismo botón: se borra la fila
+          del servidor y se cancela la suscripción del navegador. Los
+          endpoints caducados se borran solos cuando el push falla.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Qué no hacemos</h2>
+    <ul>
+      <li>Sin cookies de seguimiento, sin analítica, sin publicidad.</li>
+      <li>Sin cuentas de usuario ni identificadores persistentes salvo la
+          suscripción push que tú activas.</li>
+      <li>Sin cesión de datos a terceros. El push pasa por el servicio de
+          notificaciones de tu navegador (Google/Mozilla/Apple), como en toda
+          web push estándar.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Borrar todo</h2>
+    <p>Para eliminar todo dato local: desactiva las alertas (borra la
+      suscripción del servidor) y borra los datos del sitio en tu navegador.
+      No conservamos copias: la base de datos solo guarda horarios públicos,
+      estado en tiempo real y suscripciones activas.</p>
+  </div>
+</Base>
+<style>
+  ul { padding-left: 1.2rem; }
+  li { margin: .45rem 0; }
+</style>

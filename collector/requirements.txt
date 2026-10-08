@@ -1,3 +1,4 @@
 httpx==0.27.2
 SQLAlchemy==2.0.36
 psycopg[binary]==3.2.3
+pywebpush==2.2.0

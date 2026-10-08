@@ -1,4 +1,5 @@
 """API pública de puntualidad ferroviaria Renfe (v1)."""
+import json
 import os
 import re
 import time
@@ -9,6 +10,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from api.db import engine
@@ -707,4 +709,83 @@ def data_status():
     }
 
 
+# ---------- web push (v0.3): suscripciones anónimas, borrado inmediato ----------
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str = Field(min_length=20, max_length=2000)
+    keys: dict = Field(default_factory=dict)
+    config: dict = Field(default_factory=dict)
+
+
+@v1.get("/push/public-key")
+def push_public_key():
+    pk = os.environ.get("VAPID_PUBLIC_KEY", "")
+    if not pk:
+        raise HTTPException(503, "push no configurado")
+    return {"key": pk}
+
+
+@v1.post("/push/subscribe")
+def push_subscribe(body: PushSubscriptionIn):
+    keys = body.keys or {}
+    if not keys.get("p256dh") or not keys.get("auth"):
+        raise HTTPException(400, "faltan claves p256dh/auth")
+    cfg = body.config or {}
+    days = cfg.get("days") or []
+    clean = {
+        "type": cfg.get("type") if cfg.get("type") in ("journey", "station") else None,
+        "from_key": str(cfg.get("from_key") or "")[:200],
+        "to_key": str(cfg.get("to_key") or "")[:200],
+        "station_key": str(cfg.get("station_key") or "")[:200],
+        "days": [int(d) for d in days if isinstance(d, int) and 0 <= d <= 6][:7],
+        "from_time": str(cfg.get("from_time") or "")[:5],
+        "to_time": str(cfg.get("to_time") or "")[:5],
+        "threshold_min": min(max(int(cfg.get("threshold_min", 5) or 5), 1), 120),
+        "min_interval_min": min(max(int(cfg.get("min_interval_min", 30) or 30), 10), 1440),
+    }
+    ok = (clean["type"] == "journey" and clean["from_key"] and clean["to_key"]) \
+        or (clean["type"] == "station" and clean["station_key"])
+    if not ok:
+        raise HTTPException(400, "config incompleta")
+    with engine.begin() as c:
+        c.execute(text("""
+            INSERT INTO push_subs (endpoint, p256dh, auth, config)
+            VALUES (:e, :p, :a, CAST(:cfg AS jsonb))
+            ON CONFLICT (endpoint) DO UPDATE SET p256dh=:p, auth=:a, config=:cfg
+        """), {"e": body.endpoint, "p": keys["p256dh"], "a": keys["auth"],
+               "cfg": json.dumps(clean)})
+    return {"ok": True}
+
+
+@v1.post("/push/unsubscribe")
+def push_unsubscribe(body: dict):
+    endpoint = str(body.get("endpoint") or "")
+    if len(endpoint) < 20:
+        raise HTTPException(400, "endpoint inválido")
+    with engine.begin() as c:
+        c.execute(text("DELETE FROM push_subs WHERE endpoint=:e"), {"e": endpoint})
+    return {"ok": True}
+
+
 app.include_router(v1)
+
+
+@app.on_event("startup")
+def _ensure_push_table():
+    """push_subs la crea normalmente el collector (create_all); si la API
+    arranca antes, la creamos aquí para que /push/subscribe nunca falle."""
+    try:
+        with engine.begin() as c:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS push_subs (
+                    id BIGSERIAL PRIMARY KEY,
+                    endpoint TEXT UNIQUE NOT NULL,
+                    p256dh TEXT NOT NULL,
+                    auth TEXT NOT NULL,
+                    config JSONB NOT NULL,
+                    last_notify_key TEXT,
+                    last_notify_at TIMESTAMPTZ,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )"""))
+    except Exception:
+        pass

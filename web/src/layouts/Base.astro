@@ -139,7 +139,8 @@ const canonicalUrl = canonical ? new URL(canonical, site).href : Astro.url.href;
         licencia CC-BY 4.0). Proyecto independiente, no oficial, no afiliado ni
         patrocinado por Renfe.</p>
       <p>La ausencia de dato en tiempo real no implica puntualidad.
-        <a href="/fuentes">Metodología y limitaciones</a>.</p>
+        <a href="/fuentes">Metodología y limitaciones</a> ·
+        <a href="/privacidad">Privacidad</a></p>
     </div>
   </footer>
   <script is:inline>
@@ -148,6 +149,10 @@ const canonicalUrl = canonical ? new URL(canonical, site).href : Astro.url.href;
       document.documentElement.dataset.theme = cur;
       try { localStorage.setItem('tt_theme', cur); } catch (e) {}
     });
+    if ('serviceWorker' in navigator) {
+      addEventListener('load', () =>
+        navigator.serviceWorker.register('/sw.js').catch(() => {}));
+    }
   </script>
 </body>
 </html>

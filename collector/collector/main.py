@@ -8,12 +8,14 @@ from collector.config import (
     GTFS_STATIC,
     POLL_ALERTS,
     POLL_FLOTA,
+    POLL_PUSH,
     POLL_STATIC,
     POLL_TRIP_UPDATES,
     POLL_VEHICLE_POSITIONS,
 )
 from collector.db import engine, get_meta, set_meta, wait_and_create
 from collector.gtfsutil import TZINFO
+from collector.push import run_push_cycle
 from collector.realtime import (
     poll_alerts,
     poll_fleet,
@@ -84,6 +86,17 @@ async def fleet_loop():
         await asyncio.sleep(POLL_FLOTA)
 
 
+async def push_loop():
+    while True:
+        try:
+            n = await asyncio.to_thread(run_push_cycle)
+            if n:
+                log.info("push: %d notificaciones enviadas", n)
+        except Exception:
+            log.exception("push failed")
+        await asyncio.sleep(POLL_PUSH)
+
+
 async def alerts_loop():
     while True:
         try:
@@ -135,7 +148,7 @@ async def main():
         log.exception("trip_flags backfill failed")
     await asyncio.gather(
         rt_trip_loop(), rt_vehicle_loop(), fleet_loop(), alerts_loop(),
-        static_loop(), maintenance_loop(),
+        static_loop(), maintenance_loop(), push_loop(),
     )
 
 

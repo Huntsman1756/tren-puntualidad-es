@@ -1,6 +1,7 @@
 ---
 import Base from '../layouts/Base.astro';
 import SaveJourney from '../components/SaveJourney.svelte';
+import AlertButton from '../components/AlertButton.svelte';
 import { api } from '../lib/api';
 import { fmtDelay, fmtTime, fmtDuration, fmtDate } from '../lib/format';
 
@@ -55,6 +56,8 @@ const maxDate = coverage
     <h1>{fromName} → {toName}</h1>
     <a class="swaplink" href={swapHref} title="Trayecto inverso">⇅ vuelta</a>
   </div>
+  <AlertButton client:load cfg={{ type: 'journey', from_key: from, to_key: to }}
+    label={`${fromName} → ${toName}`} />
 
   <form class="dtbar card tight" method="get" action="/trayecto">
     <input type="hidden" name="from" value={from} />

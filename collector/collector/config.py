@@ -33,3 +33,8 @@ FLOTA_URL = "https://tiempo-real.renfe.com/renfe-visor/flota.json"
 SALIDAS_URL = "https://tiempo-real.renfe.com/renfe-json-cutter/write/salidas/estacion/{code}.json"
 STATIONS_GEOJSON = "https://tiempo-real.renfe.com/data/estaciones.geojson"
 POLL_FLOTA = int(os.environ.get("POLL_FLOTA", "45"))
+
+POLL_PUSH = int(os.environ.get("POLL_PUSH", "60"))
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "https://trenes.h1756.es/fuentes")
