@@ -144,38 +144,129 @@ def parse_fleet(data: dict):
     return feed_ts, list(rows.values())
 
 
-def _sched_deps(conn, feed: str, pairs: set) -> dict:
-    """dep_secs GTFS por (trip_id, stop_id) para las parejas pedidas."""
-    if not pairs:
-        return {}
-    tids = sorted({t for t, _ in pairs})
-    sids = {s for _, s in pairs}
-    return {(r[0], r[1]): r[2] for r in conn.execute(text("""
-        SELECT trip_id, stop_id, dep FROM stop_times
-        WHERE feed=:f AND trip_id = ANY(:t)"""),
-        {"f": feed, "t": tids}).all()
-        if r[1] in sids and r[2] is not None}
+def _midnight(day) -> int:
+    return int(datetime(day.year, day.month, day.day, tzinfo=TZINFO).timestamp())
 
 
-def _service_date(sched_epoch: int | None, dep_secs: int | None) -> str | None:
-    """Día de servicio GTFS de una observación en una parada.
+# Resolución de instancia: el día candidato debe quedar a menos de
+# SVC_TOL_SEC de la hora programada, y ganar al segundo candidato por
+# al menos SVC_MARGIN_SEC (los trips diarios se repiten cada 86400 s:
+# cerca del punto medio NO se infiere una fecha — se persiste NULL).
+SVC_TOL_SEC = 4 * 3600
+SVC_MARGIN_SEC = 90 * 60
 
-    sched_epoch - dep_secs ≈ medianoche del service-day (maneja paradas
-    con dep >= 86400 en servicios que cruzan medianoche). None si falta
-    el dato programado: se persiste NULL (honesto, no se inventa).
-    """
-    if sched_epoch is None or dep_secs is None:
+
+def _pick_day(scored: list, tol: int, margin: int):
+    """scored: [(error_secs, date)] por día candidato. Devuelve el día
+    ganador en ISO, o None si no hay candidato <= tol o el segundo
+    candidato queda a menos de `margin` del primero (ambiguo)."""
+    if not scored:
         return None
-    return (datetime.fromtimestamp(sched_epoch, TZINFO)
-            .date() - timedelta(days=dep_secs // 86400)).isoformat()
+    scored.sort(key=lambda x: x[0])
+    if scored[0][0] > tol:
+        return None
+    if len(scored) > 1 and scored[1][0] - scored[0][0] < margin:
+        return None
+    return scored[0][1].isoformat()
 
 
-def poll_trip_updates(feed: str):
-    data = _fetch(RT_TRIP_UPDATES[feed])
-    now = int(time.time())
+def resolve_service_dates(conn, feed: str, items: list[dict],
+                          tol: int = SVC_TOL_SEC,
+                          margin: int = SVC_MARGIN_SEC):
+    """Rellena item["svc"] = 'YYYY-MM-DD' (o None) para cada item.
+
+    item = {"t": trip_id, "a": [(stop_id, approx_epoch, pref), ...]}
+    donde approx_epoch es la mejor estimación de la hora PROGRAMADA del
+    evento en esa parada (p.ej. time - delay para trip_updates, o
+    provider_ts - delay para flota) y pref ∈ {'dep', 'arr', 'any'} elige
+    la columna GTFS a comparar.
+
+    Un día de servicio d es candidato si TODAS las anclas tienen horario
+    en el viaje y el peor error |medianoche(d)+secs - approx| <= tol.
+    Si hay >=2 candidatos y el segundo no queda al menos `margin` peor
+    que el primero, el día es ambiguo -> svc=None (no se infiere).
+    """
+    for i in items:
+        i["svc"] = None
+    items = [i for i in items if i.get("a")]
+    if not items:
+        return
+    tids = sorted({i["t"] for i in items})
+    pairs = {(i["t"], s) for i in items for s, _, _ in i["a"]}
+    svc_of = dict(conn.execute(text(
+        "SELECT trip_id, service_id FROM trips"
+        " WHERE feed=:f AND trip_id = ANY(:t)"),
+        {"f": feed, "t": tids}).all())
+    if not svc_of:
+        return
+    approx = [a for i in items for _, a, _ in i["a"]]
+    lo = (datetime.fromtimestamp(min(approx), TZINFO).date()
+          - timedelta(days=2))
+    hi = (datetime.fromtimestamp(max(approx), TZINFO).date()
+          + timedelta(days=2))
+    days_of: dict[str, list] = {}
+    for sid, day in conn.execute(text(
+            "SELECT service_id, day FROM service_days WHERE feed=:f"
+            " AND service_id = ANY(:s) AND day BETWEEN :lo AND :hi"),
+            {"f": feed, "s": sorted(set(svc_of.values())),
+             "lo": lo, "hi": hi}):
+        days_of.setdefault(sid, []).append(day)
+    secs: dict = {}
+    stop_ids = sorted({s for _, s in pairs})
+    for t, s, dep, arr in conn.execute(text(
+            "SELECT trip_id, stop_id, dep, arr FROM stop_times"
+            " WHERE feed=:f AND trip_id = ANY(:t) AND stop_id = ANY(:s)"),
+            {"f": feed, "t": tids, "s": stop_ids}):
+        if (t, s) in pairs:
+            e = secs.setdefault((t, s), {"dep": [], "arr": []})
+            if dep is not None:
+                e["dep"].append(dep)
+            if arr is not None:
+                e["arr"].append(arr)
+    midnights: dict = {}
+    for i in items:
+        days = days_of.get(svc_of.get(i["t"])) or []
+        scored = []
+        for d in days:
+            base = midnights.get(d)
+            if base is None:
+                base = midnights[d] = _midnight(d)
+            worst, ok = 0, True
+            for s, apx, pref in i["a"]:
+                ent = secs.get((i["t"], s))
+                if not ent:
+                    ok = False
+                    break
+                vals = (ent["dep"] if pref == "dep"
+                        else ent["arr"] if pref == "arr" else []) \
+                    or ent["dep"] or ent["arr"]
+                if not vals:
+                    ok = False
+                    break
+                worst = max(worst, min(abs(base + v - apx) for v in vals))
+            if ok:
+                scored.append((worst, d))
+        i["svc"] = _pick_day(scored, tol, margin)
+
+
+def _mark_capture(conn, feed: str, source: str, ts: int):
+    """Fija el inicio efectivo de la captura tipificada por (feed, fuente).
+    Solo el primer valor escrito cuenta: es la cota inferior honesta de
+    cualquier ventana de cobertura."""
+    conn.execute(text(
+        "INSERT INTO meta(key,value) VALUES(:k,:v) ON CONFLICT DO NOTHING"),
+        {"k": f"capture_start_{feed}_{source}", "v": str(ts)})
+
+
+def poll_trip_updates(feed: str, data: dict | None = None,
+                      now: int | None = None):
+    if data is None:
+        data = _fetch(RT_TRIP_UPDATES[feed])
+    now = int(now if now is not None else time.time())
     feed_ts, trips, stu_list_all = parse_trip_updates(data, feed, now)
 
     with engine.begin() as conn:
+        _mark_capture(conn, feed, "trip_update", now)
         if trips:
             conn.execute(text("""
                 INSERT INTO rt_trip(feed,trip_id,delay,sched_rel,next_stop_id,next_stop_time,next_stop_delay,updated_at,first_seen)
@@ -195,17 +286,26 @@ def poll_trip_updates(feed: str):
         # Observaciones: solo si cambia delay o time respecto a la última
         # registrada para esta instancia (feed,trip_id,service_date,stop_id).
         if stu_list_all:
-            deps = _sched_deps(conn, feed,
-                               {(s["t"], s["s"]) for s in stu_list_all})
-            # epoch programado = time - delay (time es predicho en GTFS-RT)
+            # La instancia se resuelve contra GTFS+calendario: el evento
+            # programado aproximado es time - delay (time es la predicción
+            # del feed). Sin candidato inequívoco -> svc queda NULL.
+            items = []
             for s in stu_list_all:
-                d = s["delay"] or 0
-                sched = s["time"] - d if s["time"] else None
-                s["svc"] = _service_date(sched, deps.get((s["t"], s["s"])))
-                s["src"] = "trip_update"
-                s["kind"] = "prediction"
+                s["src"], s["kind"], s["svc"] = "trip_update", "prediction", None
+                if s["time"]:
+                    # arr/dep indistinguibles a nivel de día de servicio
+                    items.append({"t": s["t"], "_s": s,
+                                  "a": [(s["s"], s["time"] - (s["delay"] or 0),
+                                         "any")]})
+            resolve_service_dates(conn, feed, items)
+            for it in items:
+                it["_s"]["svc"] = it["svc"]
+            # clave de dedup: svc se resuelve como str ISO; la BD devuelve
+            # date -> normalizar a str para que la comparación muerda
             last = {
-                (r.trip_id, r.service_date, r.stop_id): (r.delay, r.time)
+                (r.trip_id,
+                 str(r.service_date) if r.service_date else None,
+                 r.stop_id): (r.delay, r.time)
                 for r in conn.execute(text("""
                     SELECT DISTINCT ON (trip_id, service_date, stop_id)
                            trip_id, service_date, stop_id, delay, time
@@ -257,16 +357,23 @@ def poll_alerts(feed: str):
     return len(rows)
 
 
-def poll_fleet():
+def poll_fleet(data: dict | None = None, now: int | None = None):
     """flota.json del visor oficial: retraso informado, posición y vía (CER).
 
     kind='reported': es el retraso notificado en la parada actual, NO una
     llegada efectiva. Se deduplica por instancia (trip_id, service_date,
-    stop_id): solo se guarda si el retraso cambia."""
-    data = _fetch(FLOTA_URL)
+    stop_id): solo se guarda si el retraso cambia.
+
+    El día de servicio se resuelve contra GTFS+calendario con dos anclas:
+    la salida programada en la parada actual (feed_ts - retraso) y la ETA
+    a la siguiente parada. Si no hay un único día inequívoco, svc=None:
+    no se infiere una fecha de servicio ambigua."""
+    if data is None:
+        data = _fetch(FLOTA_URL)
     feed_ts, rows = parse_fleet(data)
-    now = int(time.time())
+    now = int(now if now is not None else time.time())
     with engine.begin() as conn:
+        _mark_capture(conn, "cer", "fleet", now)
         conn.execute(text("DELETE FROM rt_fleet"))
         if rows:
             conn.execute(text("""
@@ -276,14 +383,20 @@ def poll_fleet():
             """), rows)
         cands = [r for r in rows if r["dm"] is not None and r["cur"]]
         if cands:
-            deps = _sched_deps(conn, "cer",
-                               {(r["t"], r["cur"]) for r in cands})
+            items = []
             for r in cands:
-                # epoch aprox. de la salida programada en la parada actual
-                sched = now - r["dm"] * 60
-                r["svc"] = _service_date(sched, deps.get((r["t"], r["cur"])))
+                anchors = [(r["cur"], feed_ts - r["dm"] * 60, "dep")]
+                if r["ns"] and r["eta"]:
+                    anchors.append((r["ns"], r["eta"] - r["dm"] * 60, "arr"))
+                r["_it"] = {"t": r["t"], "a": anchors}
+                items.append(r["_it"])
+            resolve_service_dates(conn, "cer", items)
+            for r in cands:
+                r["svc"] = r.pop("_it")["svc"]
             last = {
-                (r.trip_id, r.service_date, r.stop_id): r.delay
+                (r.trip_id,
+                 str(r.service_date) if r.service_date else None,
+                 r.stop_id): r.delay
                 for r in conn.execute(text("""
                     SELECT DISTINCT ON (trip_id, service_date, stop_id)
                            trip_id, service_date, stop_id, delay
@@ -310,8 +423,16 @@ def poll_fleet():
 
 def prune_history(days=90):
     cut = int(time.time()) - days * 86400
+    cut_day = datetime.fromtimestamp(cut, TZINFO).date()
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM observations WHERE observed_at < :c"), {"c": cut})
+        # versiones mínimas de programación histórica, mismo horizonte
+        conn.execute(text("DELETE FROM circulation_stop WHERE day < :d"),
+                     {"d": cut_day})
+        conn.execute(text("DELETE FROM circulation WHERE day < :d"),
+                     {"d": cut_day})
+        conn.execute(text("DELETE FROM sched_capture WHERE day < :d"),
+                     {"d": cut_day})
         # Viajes en rt_trip que llevan >12h sin actualizarse: limpieza
         conn.execute(text("DELETE FROM rt_trip WHERE updated_at < :c"),
                      {"c": int(time.time()) - 43200})

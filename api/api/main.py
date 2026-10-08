@@ -4,7 +4,7 @@ import os
 import re
 import time
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
@@ -700,18 +700,33 @@ def alerts(feed: str = "cer", stop_id: str | None = None):
 
 @v1.get("/stations/{feed}/{stop_id}/punctuality")
 def station_punctuality(feed: str, stop_id: str, days: int = Query(7, ge=1, le=90)):
-    """Histórico metodológicamente honesto (v0.3.3).
+    """Histórico metodológicamente honesto.
 
     NO es puntualidad real: es el retraso *informado* por los feeds RT.
     Las métricas se calculan por INSTANCIA DE CIRCULACIÓN
     (feed, trip_id, service_date), no por registro — un tren con muchas
     actualizaciones no pesa más que otro.
-    coverage = instancias con algún dato RT / instancias programadas
-    (trip por día de servicio). Los registros legacy sin service_date se
-    cuentan aparte y no entran en las métricas.
+
+    Denominador = circulaciones programadas capturadas (snapshot
+    `circulation_stop`, inmutable una vez cerrado el día), acotadas al
+    inicio efectivo de la captura tipificada: los días previos a la
+    monitorización no cuentan como programados-perdidos. Los registros
+    legacy sin service_date se cuentan aparte y no entran en las
+    métricas.
     """
+    _, _, today = _now()
     with engine.connect() as c:
-        # último delay informado por instancia y parada
+        # inicio efectivo de captura tipificada del feed (peor cota)
+        caps = {r["key"]: int(r["value"]) for r in c.execute(text(
+            "SELECT key, value FROM meta WHERE key LIKE :p"),
+            {"p": f"capture_start_{feed}_%"}).mappings()}
+        cap_start = min(caps.values()) if caps else None
+        d1 = today
+        d0 = today - timedelta(days=days)
+        if cap_start:
+            cap_day = datetime.fromtimestamp(cap_start, TZ).date()
+            if cap_day > d0:
+                d0 = cap_day
         obs = c.execute(text("""
             SELECT o.trip_id, o.service_date, o.delay, o.kind, o.source
             FROM (
@@ -719,40 +734,46 @@ def station_punctuality(feed: str, stop_id: str, days: int = Query(7, ge=1, le=9
                        trip_id, service_date, delay, kind, source, observed_at
                 FROM observations
                 WHERE feed=:f AND stop_id=:s AND delay IS NOT NULL
-                  AND service_date >= CURRENT_DATE - CAST(:days AS int) * INTERVAL '1 day'
-                  AND service_date <= CURRENT_DATE
+                  AND service_date >= :d0 AND service_date <= :d1
                 ORDER BY trip_id, service_date, observed_at DESC
             ) o"""),
-            {"f": feed, "s": stop_id, "days": days}).mappings().all()
+            {"f": feed, "s": stop_id, "d0": d0, "d1": d1}).mappings().all()
         legacy = c.execute(text("""
             SELECT count(*) FROM observations
             WHERE feed=:f AND stop_id=:s AND service_date IS NULL
               AND observed_at > :since"""),
             {"f": feed, "s": stop_id,
              "since": int(time.time()) - days * 86400}).scalar()
-        # instancias programadas = circulaciones (trip por día) que paran aquí
+        # instancias programadas = circulaciones capturadas que paran aquí
         scheduled = c.execute(text("""
             SELECT count(*) FROM (
-                SELECT DISTINCT st.trip_id, sd.day
-                FROM stop_times st
-                JOIN trips t ON t.feed=st.feed AND t.trip_id=st.trip_id
-                JOIN service_days sd ON sd.feed=t.feed
-                                     AND sd.service_id=t.service_id
-                WHERE st.feed=:f AND st.stop_id=:s
-                  AND sd.day >= CURRENT_DATE - CAST(:days AS int) * INTERVAL '1 day'
-                  AND sd.day <= CURRENT_DATE) x"""),
-            {"f": feed, "s": stop_id, "days": days}).scalar()
+                SELECT DISTINCT trip_id, day
+                FROM circulation_stop
+                WHERE feed=:f AND stop_id=:s
+                  AND day BETWEEN :d0 AND :d1) x"""),
+            {"f": feed, "s": stop_id, "d0": d0, "d1": d1}).scalar()
+        monitored = c.execute(text("""
+            SELECT count(*) FROM sched_capture
+            WHERE feed=:f AND day BETWEEN :d0 AND :d1"""),
+            {"f": feed, "d0": d0, "d1": d1}).scalar()
     if not obs:
         return {"feed": feed, "stop_id": stop_id, "days": days,
+                "window": {"from": str(d0), "to": str(d1),
+                           "days_captured": monitored},
+                "capture_start": caps or None,
                 "circulations_with_rt": 0, "circulations_scheduled": scheduled,
                 "legacy_records": legacy,
                 "semantics": "reported_delay",
-                "note": "sin observaciones todavía — el histórico se acumula desde el primer despliegue"}
+                "note": "sin observaciones tipificadas todavía — el histórico "
+                        "se acumula desde el inicio efectivo de la captura"}
     delays = sorted(o["delay"] for o in obs)
     n = len(delays)
     reported = sum(1 for o in obs if o["kind"] == "reported")
     return {
         "feed": feed, "stop_id": stop_id, "days": days,
+        "window": {"from": str(d0), "to": str(d1),
+                   "days_captured": monitored},
+        "capture_start": caps or None,
         "circulations_with_rt": n,
         "circulations_scheduled": scheduled,
         "coverage_pct": round(100 * n / scheduled, 1) if scheduled else None,
@@ -1061,6 +1082,10 @@ def push_unsubscribe(body: dict):
         c.execute(text("DELETE FROM push_subs WHERE endpoint=:e"), {"e": endpoint})
     return {"ok": True}
 
+
+from api.stats import stats_router  # noqa: E402  (router aparte; import aquí)
+
+v1.include_router(stats_router)
 
 app.include_router(v1)
 

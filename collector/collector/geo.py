@@ -50,6 +50,105 @@ NEAR_CHAIN_M = 8_000   # propagación a paradas ya clasificadas
 GEOCODER_URL = "https://www.cartociudad.es/geocoder/api/geocoder/reverseGeocode"
 GEOCODER_PAUSE = 0.2   # educado con el servicio IGN
 
+# Núcleo de Cercanías: clasificación oficial del visor Renfe
+# (NUCLEO / NOMBRE_NUCLEO / LINEAS por CODIGO_ESTACION).
+NUCLEO_GEOJSON = "https://tiempo-real.renfe.com/data/estaciones.geojson"
+ROUTE_CORE_MIN_SHARE = 0.8   # asignación ruta->núcleo solo si >=80% acuerdo
+
+
+def fetch_nucleos() -> dict:
+    """GeoJSON oficial del visor Renfe: núcleo por CODIGO_ESTACION.
+
+    Devuelve {codigo: {"nuc_code", "nuc", "lines"}}. Los códigos de
+    estación se comparten entre los feeds cer/ld (misma estación física).
+    """
+    try:
+        r = httpx.get(NUCLEO_GEOJSON, timeout=60, follow_redirects=True)
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        log.exception("geojson núcleos falló")
+        return {}
+    out = {}
+    for f in data.get("features", []):
+        p = f.get("properties") or {}
+        code = str(p.get("CODIGO_ESTACION") or "").strip()
+        name = (p.get("NOMBRE_NUCLEO") or "").strip()
+        if not code or not name:
+            continue
+        ent = {"nuc_code": str(p.get("NUCLEO") or "").strip(),
+               "nuc": name,
+               "lines": (p.get("LINEAS") or "").strip() or None}
+        out[code] = ent
+        if code.isdigit() and len(code) < 5:
+            out[code.zfill(5)] = ent  # GTFS usa códigos de 5 dígitos
+    return out
+
+
+def apply_nucleos(conn, nuc: dict) -> dict:
+    """Escribe el núcleo oficial en geo_station y el núcleo mayoritario
+    verificable de cada ruta CER en route_core.
+
+    route_core solo se asigna si el >=80% de las paradas clasificadas de
+    la ruta coinciden en el mismo núcleo; si no, queda NULL (ambiguo)."""
+    if not nuc:
+        return {"nucleos": 0}
+    conn.execute(text(
+        "UPDATE geo_station SET nucleo_code=NULL, nucleo=NULL, lineas=NULL"))
+    conn.execute(text("""
+        UPDATE geo_station SET nucleo_code=:nc, nucleo=:n, lineas=:l
+        WHERE stop_id=:code"""),
+        [{"code": c, "nc": v["nuc_code"], "n": v["nuc"], "l": v["lines"]}
+         for c, v in nuc.items()])
+    n_st = conn.execute(text(
+        "SELECT count(*) FROM geo_station WHERE nucleo IS NOT NULL")).scalar()
+
+    # ruta -> núcleo por mayoría de sus paradas clasificadas (CER únicamente:
+    # una ruta LD que pisa Atocha no pertenece al núcleo de Madrid)
+    # pares (ruta, parada) distintos — la evidencia son paradas, no viajes
+    votes = conn.execute(text("""
+        SELECT u.route_id, g.nucleo, g.nucleo_code, count(*) AS n
+        FROM (SELECT DISTINCT t.route_id, st.stop_id
+              FROM trips t JOIN stop_times st
+                ON st.feed=t.feed AND st.trip_id=t.trip_id
+              WHERE t.feed='cer') u
+        JOIN geo_station g ON g.feed='cer' AND g.stop_id=u.stop_id
+                          AND g.nucleo IS NOT NULL
+        GROUP BY u.route_id, g.nucleo, g.nucleo_code""")).all()
+    totals = dict(conn.execute(text("""
+        SELECT route_id, count(*) FROM (
+            SELECT DISTINCT t.route_id, st.stop_id
+            FROM trips t JOIN stop_times st
+              ON st.feed=t.feed AND st.trip_id=t.trip_id
+            WHERE t.feed='cer') u GROUP BY route_id""")).all())
+    by_route: dict = {}
+    for rid, nuc_name, nuc_code, n in votes:
+        by_route.setdefault(rid, []).append((n, nuc_name, nuc_code))
+    conn.execute(text("DELETE FROM route_core"))
+    rows = []
+    now = int(__import__("time").time())
+    for rid, lst in by_route.items():
+        lst.sort(reverse=True)
+        matched_total = sum(n for n, _, _ in lst)
+        top_n, top_nuc, top_code = lst[0]
+        share = top_n / matched_total
+        rows.append({"rid": rid,
+                     "nc": top_code if share >= ROUTE_CORE_MIN_SHARE else None,
+                     "n": top_nuc if share >= ROUTE_CORE_MIN_SHARE else None,
+                     "share": round(share, 3), "m": top_n,
+                     "t": totals.get(rid, matched_total), "now": now})
+    # rutas sin parada clasificada: fila explícita con nucleo NULL
+    for rid in set(totals) - set(by_route):
+        rows.append({"rid": rid, "nc": None, "n": None, "share": None,
+                     "m": 0, "t": totals[rid], "now": now})
+    if rows:
+        conn.execute(text("""
+            INSERT INTO route_core (feed, route_id, nucleo_code, nucleo,
+                                    share, matched, total, updated_at)
+            VALUES ('cer', :rid, :nc, :n, :share, :m, :t, :now)"""), rows)
+    return {"stops_nucleo": n_st, "routes": len(rows),
+            "routes_con_nucleo": sum(1 for r in rows if r["n"])}
+
 
 def _cartociudad(lat: float, lon: float) -> dict | None:
     """Geocodificador inverso oficial IGN. Devuelve cpro/ccaa/muni o None."""
@@ -328,10 +427,16 @@ def run_geo() -> dict:
     cat = fetch_catalogs()
     if not cat:
         return {"error": "sin catálogos"}
+    nuc = fetch_nucleos()
     with engine.begin() as conn:
         stops = [dict(r) for r in conn.execute(text(
             "SELECT feed, stop_id, name, lat, lon FROM stops")).mappings()]
         stats = reconcile(conn, stops, cat)
+        if nuc:
+            stats.update(apply_nucleos(conn, nuc))
+            set_meta(conn, "nucleo_stats",
+                     {k: stats[k] for k in
+                      ("stops_nucleo", "routes_con_nucleo")})
         set_meta(conn, "geo_run_ts", __import__("time").time())
         set_meta(conn, "geo_stats", stats)
     return stats

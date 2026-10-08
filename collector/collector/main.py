@@ -24,7 +24,11 @@ from collector.realtime import (
     poll_vehicle_positions,
     prune_history,
 )
-from collector.static_load import compute_trip_flags, maybe_reload
+from collector.static_load import (
+    compute_trip_flags,
+    ensure_snapshots,
+    maybe_reload,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +55,11 @@ async def static_loop():
                 await asyncio.to_thread(maybe_reload, feed)
             except Exception:
                 log.exception("static reload %s failed", feed)
+            try:
+                # histórico mínimo: también cuando el GTFS no cambia
+                await asyncio.to_thread(ensure_snapshots, feed)
+            except Exception:
+                log.exception("snapshot %s failed", feed)
         await asyncio.sleep(POLL_STATIC)
 
 
@@ -117,6 +126,7 @@ async def maintenance_loop():
             await asyncio.to_thread(prune_history)
             for feed in GTFS_STATIC:
                 await asyncio.to_thread(maybe_reload, feed, True)  # recarga diaria forzada
+                await asyncio.to_thread(ensure_snapshots, feed)   # cierra el día
             await asyncio.to_thread(run_geo)  # reclasificar tras recarga
         except Exception:
             log.exception("maintenance failed")
@@ -148,6 +158,15 @@ async def main():
         await asyncio.to_thread(_backfill_flags)
     except Exception:
         log.exception("trip_flags backfill failed")
+    # histórico mínimo de programación: cubre también el caso en que el
+    # GTFS no se recargó en el arranque (firma sin cambios)
+    for feed in GTFS_STATIC:
+        try:
+            n = await asyncio.to_thread(ensure_snapshots, feed)
+            if n:
+                log.info("snapshots %s: %d días escritos", feed, n)
+        except Exception:
+            log.exception("ensure_snapshots %s failed", feed)
     # conciliación territorial (catálogos oficiales Renfe)
     try:
         st = await asyncio.to_thread(run_geo)

@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.4] — 2026-10-09
+
+### Identidad histórica corregida
+- `service_date` ya no se infiere de `now - delay`: se resuelve contra
+  GTFS (trips + calendario + stop_times) con anclas de parada; si hay
+  ambigüedad queda NULL (nunca se inventa una fecha).
+- Identidad (feed, trip_id, service_date) estable ante cambios de día,
+  retrasos extremos y recargas GTFS. La deduplicación normaliza fechas.
+
+### Snapshot de programación histórica
+- Nuevas tablas `sched_capture`, `circulation`, `circulation_stop`:
+  cada día de servicio se captura una vez; los días cerrados son
+  inmutables ante recargas GTFS (marcados `late` si se capturan a
+  posteriori). Los denominadores históricos ya no cambian a posteriori.
+
+### Cobertura desde el inicio real de captura
+- `meta.capture_start_<feed>_<fuente>` marca el inicio efectivo de la
+  captura tipificada; la migración lo siembra desde el primer dato
+  ya tipificado existente. Las métricas nunca cuentan días no
+  monitorizados.
+
+### Núcleos verificables + stats API (backend)
+- `geo_station` gana `nucleo`/`nucleo_code`/`lineas` desde el GeoJSON
+  oficial del visor Renfe; `route_core` asigna cada ruta CER a su
+  núcleo por mayoría de paradas con evidencia (share/matched/total).
+- `/api/v1/stats/{options,delays,compare}`: distribuciones de retraso
+  informado con gate estadístico público; las comparativas quedan
+  desactivadas mientras la cobertura no sea defendible.
+
+### Tests
+- `tests/test_collector_db.py`: integración real sobre PostgreSQL
+  (ingestas sucesivas, dedup, cambio de día, recarga GTFS, snapshot,
+  cobertura, gates). CI corre la suite con Postgres 16.
+
 ## [0.3.3] — 2026-10-08
 
 ### Modelo histórico corregido (metodología honesta)

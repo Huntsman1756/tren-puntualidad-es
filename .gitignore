@@ -10,3 +10,4 @@ data/
 .astro/
 
 .tmp/
+.testenv

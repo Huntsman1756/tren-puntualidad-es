@@ -103,7 +103,99 @@ def load_feed(feed: str, path: str, conn):
     conn.execute(text("ANALYZE stop_times"))
     conn.execute(text("ANALYZE trips"))
     counts["trip_flags"] = compute_trip_flags(conn, feed)
+    counts["snapshots"] = ensure_snapshots_conn(conn, feed)
     return counts
+
+
+def snapshot_day(conn, feed: str, day, late: bool):
+    """Vuelca la programación del día de servicio al histórico mínimo.
+
+    Solo circulaciones activas ese día (trip x día). Se llama dentro de
+    la transacción de carga o desde ensure_snapshots, y solo para días
+    no cerrados: los días cerrados nunca se reescriben."""
+    conn.execute(text(
+        "DELETE FROM circulation_stop WHERE feed=:f AND day=:d"),
+        {"f": feed, "d": day})
+    conn.execute(text(
+        "DELETE FROM circulation WHERE feed=:f AND day=:d"),
+        {"f": feed, "d": day})
+    conn.execute(text("""
+        INSERT INTO circulation (feed, day, trip_id, route_id, train_number,
+                                 first_stop, last_stop, dep_secs, arr_secs, n_stops)
+        SELECT t.feed, sd.day, t.trip_id, t.route_id, t.train_number,
+               agg.first_stop, agg.last_stop, agg.dep_secs, agg.arr_secs, agg.n
+        FROM trips t
+        JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id
+        JOIN (
+            SELECT feed, trip_id,
+                   (array_agg(stop_id ORDER BY seq))[1] AS first_stop,
+                   (array_agg(stop_id ORDER BY seq DESC))[1] AS last_stop,
+                   min(COALESCE(dep, arr)) AS dep_secs,
+                   max(COALESCE(arr, dep)) AS arr_secs,
+                   count(*) AS n
+            FROM stop_times WHERE feed=:f GROUP BY feed, trip_id
+        ) agg ON agg.feed=t.feed AND agg.trip_id=t.trip_id
+        WHERE t.feed=:f AND sd.day=:d
+        ON CONFLICT DO NOTHING"""), {"f": feed, "d": day})
+    conn.execute(text("""
+        INSERT INTO circulation_stop (feed, day, trip_id, seq, stop_id, arr, dep)
+        SELECT st.feed, sd.day, st.trip_id, st.seq, st.stop_id, st.arr, st.dep
+        FROM stop_times st
+        JOIN trips t ON t.feed=st.feed AND t.trip_id=st.trip_id
+        JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id
+        WHERE st.feed=:f AND sd.day=:d
+        ON CONFLICT DO NOTHING"""), {"f": feed, "d": day})
+    conn.execute(text("""
+        INSERT INTO sched_capture (feed, day, captured_at, closed, late)
+        VALUES (:f, :d, :now, :closed, :late)
+        ON CONFLICT (feed, day) DO UPDATE SET captured_at=EXCLUDED.captured_at"""),
+        {"f": feed, "d": day, "now": int(time.time()),
+         "closed": 1 if day < datetime.now(TZINFO).date() else 0,
+         "late": 1 if late else 0})
+
+
+def refresh_day(conn, feed: str, day):
+    """Re-vuelca un día aún abierto (en curso): aplica correcciones del
+    GTFS mientras el día no haya cerrado."""
+    snapshot_day(conn, feed, day, late=False)
+
+
+def ensure_snapshots_conn(conn, feed: str) -> int:
+    """Garantiza el histórico mínimo de programación del feed.
+
+    - El día en curso se refresca en cada llamada (aún puede corregirse).
+    - Un día pasado se captura solo si nunca se volcó (late=1); una vez
+      cerrado es INMUTABLE: una recarga del GTFS no altera los
+      denominadores de días anteriores.
+    Devuelve cuántos días se escribieron."""
+    today = datetime.now(TZINFO).date()
+    days = [r[0] for r in conn.execute(text(
+        "SELECT DISTINCT day FROM service_days WHERE feed=:f AND day<=:t"),
+        {"f": feed, "t": today})]
+    caps = {r.day: r.closed for r in conn.execute(text(
+        "SELECT day, closed FROM sched_capture WHERE feed=:f"),
+        {"f": feed}).mappings()}
+    written = 0
+    for d in days:
+        st = caps.get(d)
+        if st:
+            continue                      # día cerrado: inmutable
+        if d == today:
+            refresh_day(conn, feed, d)    # día en curso: refresco
+            written += 1
+        elif st is None:
+            snapshot_day(conn, feed, d, late=True)   # captura tardía única
+            written += 1
+    conn.execute(text(
+        "UPDATE sched_capture SET closed=1 WHERE feed=:f AND day<:t AND closed=0"),
+        {"f": feed, "t": today})
+    return written
+
+
+def ensure_snapshots(feed: str) -> int:
+    """Wrapper con transacción propia (bucles periódicos)."""
+    with engine.begin() as conn:
+        return ensure_snapshots_conn(conn, feed)
 
 
 def compute_trip_flags(conn, feed: str) -> int:
