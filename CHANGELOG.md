@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.3.3] — 2026-10-08
+
+### Modelo histórico corregido (metodología honesta)
+- `observations` ahora tipifica cada registro: `source` (trip_update |
+  fleet | legacy), `kind` (prediction | reported | legacy),
+  `service_date` y `provider_ts` (timestamp del feed) vs `observed_at`
+  (hora de recogida propia).
+- `service_date` = día de servicio GTFS (feed, trip_id, service_date):
+  los trip_id de Cercanías que se repiten a diario ya no se confunden,
+  y los servicios que cruzan medianoche conservan su día de servicio.
+- Registros anteriores quedan como `legacy` (sin service_date recuperable):
+  se conservan pero no entran en las métricas nuevas.
+- Flota ya no escribe observación en cada poll (~45 s): deduplica por
+  instancia, solo cuando cambia el retraso informado.
+
+### Puntualidad honesta
+- `/stations/{feed}/{stop_id}/punctuality` calcula por INSTANCIA DE
+  CIRCULACIÓN (no por registro): un tren con muchas actualizaciones no
+  pesa más que otro.
+- Denominador = circulaciones programadas (trip × día activo), no
+  trip_id únicos.
+- `semantics: "reported_delay"` — es retraso informado por el feed,
+  no llegada efectiva. La web lo etiqueta así.
+- `reported_sources` separa flota (informado) vs predicción (estimado).
+
+### deploy.sh
+- `pg_dump` con `pipefail` + verificación de archivo (existe, gzip
+  íntegro, contiene `COPY public.stops`) — un backup vacío ya no
+  puede darse por bueno.
+
+
 ## [0.3.1] — 2026-10-08
 
 ### Modelo territorial de estaciones

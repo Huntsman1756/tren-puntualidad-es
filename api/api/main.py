@@ -700,43 +700,72 @@ def alerts(feed: str = "cer", stop_id: str | None = None):
 
 @v1.get("/stations/{feed}/{stop_id}/punctuality")
 def station_punctuality(feed: str, stop_id: str, days: int = Query(7, ge=1, le=90)):
-    """Histórico desde observations (retrasos observados/notificados).
-    coverage = viajes con observación / viajes programados que paran aquí."""
-    now = int(time.time())
-    since = now - days * 86400
+    """Histórico metodológicamente honesto (v0.3.3).
+
+    NO es puntualidad real: es el retraso *informado* por los feeds RT.
+    Las métricas se calculan por INSTANCIA DE CIRCULACIÓN
+    (feed, trip_id, service_date), no por registro — un tren con muchas
+    actualizaciones no pesa más que otro.
+    coverage = instancias con algún dato RT / instancias programadas
+    (trip por día de servicio). Los registros legacy sin service_date se
+    cuentan aparte y no entran en las métricas.
+    """
     with engine.connect() as c:
+        # último delay informado por instancia y parada
         obs = c.execute(text("""
-            SELECT o.trip_id, o.delay, o.observed_at
-            FROM observations o
-            WHERE o.feed=:f AND o.stop_id=:s AND o.observed_at > :since
-        """), {"f": feed, "s": stop_id, "since": since}).mappings().all()
+            SELECT o.trip_id, o.service_date, o.delay, o.kind, o.source
+            FROM (
+                SELECT DISTINCT ON (trip_id, service_date)
+                       trip_id, service_date, delay, kind, source, observed_at
+                FROM observations
+                WHERE feed=:f AND stop_id=:s AND delay IS NOT NULL
+                  AND service_date >= CURRENT_DATE - CAST(:days AS int) * INTERVAL '1 day'
+                  AND service_date <= CURRENT_DATE
+                ORDER BY trip_id, service_date, observed_at DESC
+            ) o"""),
+            {"f": feed, "s": stop_id, "days": days}).mappings().all()
+        legacy = c.execute(text("""
+            SELECT count(*) FROM observations
+            WHERE feed=:f AND stop_id=:s AND service_date IS NULL
+              AND observed_at > :since"""),
+            {"f": feed, "s": stop_id,
+             "since": int(time.time()) - days * 86400}).scalar()
+        # instancias programadas = circulaciones (trip por día) que paran aquí
         scheduled = c.execute(text("""
-            SELECT count(DISTINCT st.trip_id) FROM stop_times st
-            JOIN trips t ON t.feed=st.feed AND t.trip_id=st.trip_id
-            JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id
-            WHERE st.feed=:f AND st.stop_id=:s
-              AND sd.day >= CURRENT_DATE - CAST(:days AS int) * INTERVAL '1 day'
-              AND sd.day <= CURRENT_DATE"""),
+            SELECT count(*) FROM (
+                SELECT DISTINCT st.trip_id, sd.day
+                FROM stop_times st
+                JOIN trips t ON t.feed=st.feed AND t.trip_id=st.trip_id
+                JOIN service_days sd ON sd.feed=t.feed
+                                     AND sd.service_id=t.service_id
+                WHERE st.feed=:f AND st.stop_id=:s
+                  AND sd.day >= CURRENT_DATE - CAST(:days AS int) * INTERVAL '1 day'
+                  AND sd.day <= CURRENT_DATE) x"""),
             {"f": feed, "s": stop_id, "days": days}).scalar()
     if not obs:
         return {"feed": feed, "stop_id": stop_id, "days": days,
-                "coverage_observed": 0, "coverage_scheduled": scheduled,
+                "circulations_with_rt": 0, "circulations_scheduled": scheduled,
+                "legacy_records": legacy,
+                "semantics": "reported_delay",
                 "note": "sin observaciones todavía — el histórico se acumula desde el primer despliegue"}
-    delays = [o["delay"] for o in obs if o["delay"] is not None]
-    uniq_trips = {o["trip_id"] for o in obs}
-    delays.sort()
+    delays = sorted(o["delay"] for o in obs)
     n = len(delays)
+    reported = sum(1 for o in obs if o["kind"] == "reported")
     return {
         "feed": feed, "stop_id": stop_id, "days": days,
-        "observations": n, "trips_observed": len(uniq_trips),
-        "coverage_scheduled": scheduled,
-        "coverage_observed_pct": round(100 * len(uniq_trips) / scheduled, 1) if scheduled else None,
-        "delay_avg_sec": round(sum(delays) / n),
+        "circulations_with_rt": n,
+        "circulations_scheduled": scheduled,
+        "coverage_pct": round(100 * n / scheduled, 1) if scheduled else None,
+        "reported_sources": {"fleet_reported": reported,
+                             "trip_update_prediction": n - reported},
+        "legacy_records": legacy,
+        "semantics": "reported_delay",
         "delay_median_sec": delays[n // 2],
-        "delay_p90_sec": delays[int(n * 0.9)],
+        "delay_p90_sec": delays[min(int(n * 0.9), n - 1)],
         "on_time_2min_pct": round(100 * sum(1 for d in delays if d <= 120) / n, 1),
         "delayed_over_5min_pct": round(100 * sum(1 for d in delays if d > 300) / n, 1),
-        "note": "retrasos observados por el visor oficial; población = observaciones, no servicios completos",
+        "note": "retraso informado por el feed RT — NO llegada efectiva. "
+                "Población = instancias de circulación con dato RT.",
     }
 
 

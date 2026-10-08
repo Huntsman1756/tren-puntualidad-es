@@ -127,15 +127,35 @@ class Alert(Base):
 
 
 class Observation(Base):
-    """Histórico: cada cambio material de predicción por parada."""
+    """Histórico de observaciones por parada.
+
+    Tipología explícita (v0.3.3):
+      - kind='prediction'  cambio en trip_updates (hora estimada del feed)
+      - kind='reported'    estado notificado por flota (retraso informado
+                           en la parada actual — NO llegada efectiva)
+      - kind='legacy'      registros previos sin tipología recuperable
+      - source: trip_update | fleet | legacy
+    service_date = día de servicio GTFS (feed,trip_id,service_date) =
+    identidad de circulación. NULL en registros legacy.
+    provider_ts = timestamp declarado por el feed (feed timestamp);
+    observed_at = hora de recogida por nosotros.
+    """
     __tablename__ = "observations"
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     feed = Column(String(8))
     trip_id = Column(String(64))
+    service_date = Column(Date)             # NULL = legacy
     stop_id = Column(String(32))
     delay = Column(Integer)
     time = Column(BigInteger)
+    source = Column(String(16), default="legacy")
+    kind = Column(String(16), default="legacy")
+    provider_ts = Column(BigInteger)
     observed_at = Column(BigInteger)
+
+
+Index("ix_obs_instance", Observation.feed, Observation.trip_id,
+      Observation.service_date)
 
 
 Index("ix_obs_trip", Observation.feed, Observation.trip_id)

@@ -6,7 +6,7 @@ import contextlib
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 from sqlalchemy import text
@@ -144,6 +144,32 @@ def parse_fleet(data: dict):
     return feed_ts, list(rows.values())
 
 
+def _sched_deps(conn, feed: str, pairs: set) -> dict:
+    """dep_secs GTFS por (trip_id, stop_id) para las parejas pedidas."""
+    if not pairs:
+        return {}
+    tids = sorted({t for t, _ in pairs})
+    sids = {s for _, s in pairs}
+    return {(r[0], r[1]): r[2] for r in conn.execute(text("""
+        SELECT trip_id, stop_id, dep FROM stop_times
+        WHERE feed=:f AND trip_id = ANY(:t)"""),
+        {"f": feed, "t": tids}).all()
+        if r[1] in sids and r[2] is not None}
+
+
+def _service_date(sched_epoch: int | None, dep_secs: int | None) -> str | None:
+    """Día de servicio GTFS de una observación en una parada.
+
+    sched_epoch - dep_secs ≈ medianoche del service-day (maneja paradas
+    con dep >= 86400 en servicios que cruzan medianoche). None si falta
+    el dato programado: se persiste NULL (honesto, no se inventa).
+    """
+    if sched_epoch is None or dep_secs is None:
+        return None
+    return (datetime.fromtimestamp(sched_epoch, TZINFO)
+            .date() - timedelta(days=dep_secs // 86400)).isoformat()
+
+
 def poll_trip_updates(feed: str):
     data = _fetch(RT_TRIP_UPDATES[feed])
     now = int(time.time())
@@ -166,23 +192,35 @@ def poll_trip_updates(feed: str):
                 VALUES(:f,:t,:s,:delay,:time,:ts)
             """), stu_list_all)
 
-        # Observaciones: solo si cambia delay o time respecto a la última registrada
+        # Observaciones: solo si cambia delay o time respecto a la última
+        # registrada para esta instancia (feed,trip_id,service_date,stop_id).
         if stu_list_all:
+            deps = _sched_deps(conn, feed,
+                               {(s["t"], s["s"]) for s in stu_list_all})
+            # epoch programado = time - delay (time es predicho en GTFS-RT)
+            for s in stu_list_all:
+                d = s["delay"] or 0
+                sched = s["time"] - d if s["time"] else None
+                s["svc"] = _service_date(sched, deps.get((s["t"], s["s"])))
+                s["src"] = "trip_update"
+                s["kind"] = "prediction"
             last = {
-                (r.trip_id, r.stop_id): (r.delay, r.time)
+                (r.trip_id, r.service_date, r.stop_id): (r.delay, r.time)
                 for r in conn.execute(text("""
-                    SELECT DISTINCT ON (trip_id, stop_id) trip_id, stop_id, delay, time
+                    SELECT DISTINCT ON (trip_id, service_date, stop_id)
+                           trip_id, service_date, stop_id, delay, time
                     FROM observations
                     WHERE feed=:f AND observed_at > :cut
-                    ORDER BY trip_id, stop_id, observed_at DESC
+                    ORDER BY trip_id, service_date, stop_id, observed_at DESC
                 """), {"f": feed, "cut": now - 86400})
             }
-            obs = [{**s, "o": now} for s in stu_list_all
-                   if last.get((s["t"], s["s"])) != (s["delay"], s["time"])]
+            obs = [{**s, "o": now, "pts": feed_ts} for s in stu_list_all
+                   if last.get((s["t"], s["svc"], s["s"])) != (s["delay"], s["time"])]
             if obs:
                 conn.execute(text("""
-                    INSERT INTO observations(feed,trip_id,stop_id,delay,time,observed_at)
-                    VALUES(:f,:t,:s,:delay,:time,:o)
+                    INSERT INTO observations(feed,trip_id,service_date,stop_id,
+                        delay,time,source,kind,provider_ts,observed_at)
+                    VALUES(:f,:t,CAST(:svc AS date),:s,:delay,:time,:src,:kind,:pts,:o)
                 """), obs)
         set_meta(conn, f"rt_trip_updates_{feed}", feed_ts)
     return len(trips)
@@ -220,14 +258,14 @@ def poll_alerts(feed: str):
 
 
 def poll_fleet():
-    """flota.json del visor oficial: retraso observado, posición y vía por tren (CER)."""
+    """flota.json del visor oficial: retraso informado, posición y vía (CER).
+
+    kind='reported': es el retraso notificado en la parada actual, NO una
+    llegada efectiva. Se deduplica por instancia (trip_id, service_date,
+    stop_id): solo se guarda si el retraso cambia."""
     data = _fetch(FLOTA_URL)
     feed_ts, rows = parse_fleet(data)
-    obs = [
-        {"f": "cer", "t": r["t"], "s": r["cur"],
-         "delay": r["dm"] * 60, "time": r["eta"], "o": int(time.time())}
-        for r in rows if r["dm"] is not None and r["cur"]
-    ]
+    now = int(time.time())
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM rt_fleet"))
         if rows:
@@ -236,11 +274,36 @@ def poll_fleet():
                     next_stop_id,next_eta,origin_stop_id,dest_stop_id,lat,lon,platform,next_platform,ts)
                 VALUES(:f,:t,:tn,:line,:dm,:cur,:ns,:eta,:org,:dst,:lat,:lon,:plat,:nplat,:ts)
             """), rows)
-        if obs:
-            conn.execute(text("""
-                INSERT INTO observations(feed,trip_id,stop_id,delay,time,observed_at)
-                VALUES(:f,:t,:s,:delay,:time,:o)
-            """), obs)
+        cands = [r for r in rows if r["dm"] is not None and r["cur"]]
+        if cands:
+            deps = _sched_deps(conn, "cer",
+                               {(r["t"], r["cur"]) for r in cands})
+            for r in cands:
+                # epoch aprox. de la salida programada en la parada actual
+                sched = now - r["dm"] * 60
+                r["svc"] = _service_date(sched, deps.get((r["t"], r["cur"])))
+            last = {
+                (r.trip_id, r.service_date, r.stop_id): r.delay
+                for r in conn.execute(text("""
+                    SELECT DISTINCT ON (trip_id, service_date, stop_id)
+                           trip_id, service_date, stop_id, delay
+                    FROM observations
+                    WHERE feed='cer' AND kind='reported' AND observed_at > :cut
+                    ORDER BY trip_id, service_date, stop_id, observed_at DESC
+                """), {"cut": now - 86400})
+            }
+            obs = [{"f": "cer", "t": r["t"], "svc": r["svc"], "s": r["cur"],
+                    "delay": r["dm"] * 60, "time": None,
+                    "src": "fleet", "kind": "reported",
+                    "pts": feed_ts, "o": now}
+                   for r in cands
+                   if last.get((r["t"], r["svc"], r["cur"])) != r["dm"] * 60]
+            if obs:
+                conn.execute(text("""
+                    INSERT INTO observations(feed,trip_id,service_date,stop_id,
+                        delay,time,source,kind,provider_ts,observed_at)
+                    VALUES(:f,:t,CAST(:svc AS date),:s,:delay,:time,:src,:kind,:pts,:o)
+                """), obs)
         set_meta(conn, "rt_fleet_cer", feed_ts)
     return len(rows)
 

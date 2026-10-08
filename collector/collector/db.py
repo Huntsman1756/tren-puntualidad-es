@@ -11,12 +11,27 @@ log = logging.getLogger("collector")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
+def _migrate(c):
+    """ALTERs idempotentes para columnas añadidas tras create_all."""
+    for stmt in (
+        "ALTER TABLE observations ADD COLUMN IF NOT EXISTS service_date DATE",
+        "ALTER TABLE observations ADD COLUMN IF NOT EXISTS source VARCHAR(16) DEFAULT 'legacy'",
+        "ALTER TABLE observations ADD COLUMN IF NOT EXISTS kind VARCHAR(16) DEFAULT 'legacy'",
+        "ALTER TABLE observations ADD COLUMN IF NOT EXISTS provider_ts BIGINT",
+        "CREATE INDEX IF NOT EXISTS ix_obs_instance ON observations(feed, trip_id, service_date)",
+        "UPDATE observations SET source='legacy', kind='legacy' WHERE source IS NULL",
+    ):
+        c.execute(text(stmt))
+
+
 def wait_and_create(retries=30):
     for i in range(retries):
         try:
             with engine.begin() as c:
                 c.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent"))
             Base.metadata.create_all(engine)
+            with engine.begin() as c2:
+                _migrate(c2)
             return
         except Exception as e:
             log.warning("db not ready (%s), retry %d/%d", e, i + 1, retries)

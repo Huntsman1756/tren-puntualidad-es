@@ -35,9 +35,17 @@ docker exec trenes-db-1 pg_isready -U "${POSTGRES_USER:-renfe}" -d renfe >/dev/n
 
 echo "==> Backup previo"
 BAK=/backups/renfe_$(date +%Y%m%d_%H%M%S).sql.gz
+# pipefail: si pg_dump falla el script aborta — no vale un gzip vacío.
 docker exec trenes-db-1 sh -c \
-  "pg_dump -U ${POSTGRES_USER:-renfe} -d renfe | gzip > $BAK"
-echo "    backup: $BAK ($(docker exec trenes-db-1 du -h "$BAK" | cut -f1))"
+  "set -o pipefail; pg_dump -U ${POSTGRES_USER:-renfe} -d renfe | gzip > $BAK" \
+  || { echo "ERROR: pg_dump falló — abortando sin tocar nada" >&2; exit 1; }
+# verificar el archivo: existe, no vacío y gzip íntegro
+docker exec trenes-db-1 sh -c "test -s $BAK && gzip -t $BAK" \
+  || { echo "ERROR: backup $BAK vacío o corrupto — abortando" >&2; exit 1; }
+# sanity: el dump debe contener datos de stops
+docker exec trenes-db-1 sh -c "zcat $BAK | grep -q 'COPY public.stops'" \
+  || { echo "ERROR: backup sin tabla stops — abortando" >&2; exit 1; }
+echo "    backup: $BAK OK ($(docker exec trenes-db-1 du -h "$BAK" | cut -f1))"
 
 echo "==> Pull + build"
 git -C "$DIR" pull --ff-only

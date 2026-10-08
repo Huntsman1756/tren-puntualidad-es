@@ -80,16 +80,17 @@ const maxDate = coverage
       initialMeta={board} initialKind="departures" date={date} time={time} />
   </div>
 
-  {punct && punct.observations > 0 && (
+  {punct && (punct.circulations_with_rt || punct.observations) > 0 && (
     <div class="card">
-      <h2 style="margin-top:0;font-size:1rem">Puntualidad últimos {punct.days} días</h2>
+      <h2 style="margin-top:0;font-size:1rem">Retrasos informados — últimos {punct.days} días</h2>
       <p>
-        Con observación: <strong>{punct.trips_observed}</strong> trenes
-        {punct.coverage_observed_pct != null && <> ({punct.coverage_observed_pct}% de los programados)</>}.
+        Con dato en tiempo real: <strong>{punct.circulations_with_rt ?? punct.trips_observed}</strong> circulaciones
+        {(punct.coverage_pct ?? punct.coverage_observed_pct) != null &&
+          <> ({punct.coverage_pct ?? punct.coverage_observed_pct}% de las programadas)</>}.
       </p>
       <table class="board"><tbody>
-        <tr><td>Puntuales (≤2 min)</td><td><strong>{punct.on_time_2min_pct}%</strong></td></tr>
-        <tr><td>Retraso mediano</td><td>{Math.round(punct.delay_median_sec / 60)} min</td></tr>
+        <tr><td>Informados puntuales (≤2 min)</td><td><strong>{punct.on_time_2min_pct}%</strong></td></tr>
+        <tr><td>Retraso mediano informado</td><td>{Math.round(punct.delay_median_sec / 60)} min</td></tr>
         <tr><td>P90</td><td>{Math.round(punct.delay_p90_sec / 60)} min</td></tr>
         <tr><td>&gt;5 min de retraso</td><td>{punct.delayed_over_5min_pct}%</td></tr>
       </tbody></table>
