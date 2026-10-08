@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.3.1] — 2026-10-08
+
+### Modelo territorial de estaciones
+- Nueva tabla `geo_station` persistente (independiente de recargas GTFS;
+  las paradas retiradas se desactivan, no se borran).
+- Conciliación conservadora en cascada: catálogo oficial Renfe (join exacto
+  por CÓDIGO, 1924/2147) → Cartociudad/IGN (geocodificador oficial, 222)
+  → nombre único de población catalogada → vecino <10km con guarda
+  anti-frontera → cadena <8km. Todo lo demás queda sin clasificar.
+- Tabla INE embebida: 52 provincias, 19 CCAA, slugs canónicos estables.
+- Corregido: `_haversine_m` devolvía 0 sin coordenadas y permitía fusionar
+  estaciones homónimas. Ahora devuelve `None` y no se fusiona nunca.
+
+### API
+- `GET /geo/ccaa`, `/geo/ccaa/{slug}`, `/geo/provincia/{slug}`,
+  `/geo/estaciones`, `/geo/coverage` (contadores reales, sin duplicar feeds).
+- `stations/search?ccaa=&provincia=` + provincia/población en resultados.
+- `delays/ranking?ccaa=&provincia=` (por localización RT del tren).
+- Detalle de estación incluye `geo` (población, provincia, CCAA, fuente).
+
+### Web
+- `/estaciones`: explorador accesible en cascada CCAA → provincia →
+  estación, con búsqueda por nombre/población.
+- `/comunidades/{slug}` y `/provincias/{slug}` (solo territorios verificados).
+- Ficha de estación muestra población, provincia y comunidad con enlaces.
+- Autocompletado de origen/destino muestra la provincia para homónimos.
+- Sitemap incluye páginas territoriales verificadas.
+- Fix: canonical/og:url usaba `localhost` detrás del proxy; ahora usa
+  `x-forwarded-host`/`PUBLIC_SITE_URL`.
+
+### Verificación
+- 75 tests (13 nuevos de territorio: join exacto, ambigüedad fronteriza,
+  homónimos cer/ld, persistencia tras recarga, paradas sin coordenadas).
+- Casos reales validados: Orduña→Bizkaia (exclave), Malgrat/Calella→Barcelona
+  (no Girona), Vic/Manlleu→Barcelona, Ripoll→Girona, Villabona de
+  Asturias→Asturias (trampa de nombre).
+- Cobertura: 1924 catalogo + 222 cartociudad + 1 inferida = 2147;
+  0 sin clasificar en España (14 LD extranjeras sin provincia).
+
+
 ## [0.3.0] — 2026-10-08
 
 - PWA: manifest + iconos + service worker (push, click, fetch passthrough).
