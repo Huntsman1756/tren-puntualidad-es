@@ -11,6 +11,7 @@ if (!pairs.length) return Astro.redirect('/');
 let infos: any[] = [];
 let board: any = { items: [] };
 let alerts: any[] = [];
+let punct: any = null;
 try {
   infos = (await Promise.all(
     pairs.map(([f, s]) => api.station(f, s).catch(() => null)),
@@ -22,6 +23,7 @@ try {
   );
   const seen = new Set();
   alerts = alertLists.flat().filter((a) => (seen.has(a.id) ? false : seen.add(a.id)));
+  punct = await api.punctuality(infos[0].feed, infos[0].stop_id, 7).catch(() => null);
 } catch (e) {
   return Astro.redirect('/');
 }
@@ -45,4 +47,21 @@ const canonical = `/estacion/${key}`;
   <div class="card">
     <Board client:load stops={key} initialItems={board.items} initialKind="departures" />
   </div>
+
+  {punct && punct.observations > 0 && (
+    <div class="card">
+      <h2 style="margin-top:0;font-size:1rem">Puntualidad últimos {punct.days} días</h2>
+      <p>
+        Con observación: <strong>{punct.trips_observed}</strong> trenes
+        {punct.coverage_observed_pct != null && <> ({punct.coverage_observed_pct}% de los programados)</>}.
+      </p>
+      <table class="board"><tbody>
+        <tr><td>Puntuales (≤2 min)</td><td><strong>{punct.on_time_2min_pct}%</strong></td></tr>
+        <tr><td>Retraso mediano</td><td>{Math.round(punct.delay_median_sec / 60)} min</td></tr>
+        <tr><td>P90</td><td>{Math.round(punct.delay_p90_sec / 60)} min</td></tr>
+        <tr><td>&gt;5 min de retraso</td><td>{punct.delayed_over_5min_pct}%</td></tr>
+      </tbody></table>
+      <p class="muted" style="font-size:.75rem">{punct.note}</p>
+    </div>
+  )}
 </Base>

@@ -33,4 +33,6 @@ export const api = {
     get(`/api/v1/alerts?feed=${feed}${stop ? `&stop_id=${stop}` : ''}`),
   status: () => get('/api/v1/meta/status'),
   dataStatus: () => get('/api/v1/data/status'),
+  punctuality: (feed: string, id: string, days = 7) =>
+    get(`/api/v1/stations/${feed}/${id}/punctuality?days=${days}`),
 };

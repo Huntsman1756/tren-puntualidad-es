@@ -481,6 +481,47 @@ def alerts(feed: str = "cer", stop_id: str | None = None):
     return out
 
 
+@v1.get("/stations/{feed}/{stop_id}/punctuality")
+def station_punctuality(feed: str, stop_id: str, days: int = Query(7, ge=1, le=90)):
+    """Histórico desde observations (retrasos observados/notificados).
+    coverage = viajes con observación / viajes programados que paran aquí."""
+    now = int(time.time())
+    since = now - days * 86400
+    with engine.connect() as c:
+        obs = c.execute(text("""
+            SELECT o.trip_id, o.delay, o.observed_at
+            FROM observations o
+            WHERE o.feed=:f AND o.stop_id=:s AND o.observed_at > :since
+        """), {"f": feed, "s": stop_id, "since": since}).mappings().all()
+        scheduled = c.execute(text("""
+            SELECT count(DISTINCT st.trip_id) FROM stop_times st
+            JOIN trips t ON t.feed=st.feed AND t.trip_id=st.trip_id
+            JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id
+            WHERE st.feed=:f AND st.stop_id=:s
+              AND sd.day >= CURRENT_DATE - :days * INTERVAL '1 day'"""),
+            {"f": feed, "s": stop_id, "days": days}).scalar()
+    if not obs:
+        return {"feed": feed, "stop_id": stop_id, "days": days,
+                "coverage_observed": 0, "coverage_scheduled": scheduled,
+                "note": "sin observaciones todavía — el histórico se acumula desde el primer despliegue"}
+    delays = [o["delay"] for o in obs if o["delay"] is not None]
+    uniq_trips = {o["trip_id"] for o in obs}
+    delays.sort()
+    n = len(delays)
+    return {
+        "feed": feed, "stop_id": stop_id, "days": days,
+        "observations": n, "trips_observed": len(uniq_trips),
+        "coverage_scheduled": scheduled,
+        "coverage_observed_pct": round(100 * len(uniq_trips) / scheduled, 1) if scheduled else None,
+        "delay_avg_sec": round(sum(delays) / n),
+        "delay_median_sec": delays[n // 2],
+        "delay_p90_sec": delays[int(n * 0.9)],
+        "on_time_2min_pct": round(100 * sum(1 for d in delays if d <= 120) / n, 1),
+        "delayed_over_5min_pct": round(100 * sum(1 for d in delays if d > 300) / n, 1),
+        "note": "retrasos observados por el visor oficial; población = observaciones, no servicios completos",
+    }
+
+
 @v1.get("/data/status")
 def data_status():
     """Estado de frescura y cobertura de las fuentes."""
