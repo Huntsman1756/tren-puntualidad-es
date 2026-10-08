@@ -267,6 +267,23 @@ class TestFleetIngestion:
         poll_fleet(data=p2, now=now + 90)
         assert len(obs_rows(db)) == 2
 
+    def test_fleet_irregular_polling(self, db):
+        """Frecuencias de sondeo distintas: cada cambio de retraso cuenta,
+        los polls sin cambio no duplican; un gap (obs perdida) no rompe."""
+        load(db, base_zip())
+        from collector.realtime import poll_fleet
+        base = _mid(TODAY) + 10 * 3600
+        # polls a t+0, t+45s (sin cambio), t+5m (cambio), t+40m (cambio)
+        for dt_s, dm in [(0, 10), (45, 10), (300, 15), (2400, 25)]:
+            fts = datetime.fromtimestamp(base + dt_s, TZINFO)
+            poll_fleet(data=fleet_payload(
+                fts.strftime("%Y-%m-%dT%H:%M:%S"),
+                [("T1", dm, "S1", "S2", None)]), now=base + dt_s)
+        rows = [r for r in obs_rows(db)
+                if r["trip_id"] == "T1" and r["source"] == "fleet"]
+        assert len(rows) == 3   # el poll sin cambio no generó fila
+        assert {r["delay"] for r in rows} == {600, 900, 1500}
+
     def test_fleet_ambiguous_day_is_null(self, db):
         """Medianoche exacta entre dos instancias diarias equidistantes:
         svc=None (no se infiere)."""
@@ -458,7 +475,7 @@ class TestStatsApi:
         # el numerador cuenta obs EN destino (S2): flota informa en S1
         assert rep["scheduled"] == 8      # 4 viajes x 2 días
         assert rep["with_data"] == 0
-        assert d["links"]["journey"] == "/trayecto?o=cer:S1&d=cer:S2"
+        assert d["links"]["journey"] == "/trayecto?from=cer:S1&to=cer:S2"
 
     def test_stats_hour_filter(self, db):
         trips = _seed_lines(db, n_trips=6)

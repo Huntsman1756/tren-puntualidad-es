@@ -75,6 +75,37 @@ import Base from '../layouts/Base.astro';
   </div>
 
   <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Estadísticas históricas (/estadisticas)</h2>
+    <ul>
+      <li><strong>Unidad de análisis:</strong> la instancia de circulación
+          (<code>feed + trip_id + día de servicio</code>). El día de servicio se
+          resuelve contra el GTFS y su calendario — nunca se deduce de
+          «ahora menos el retraso» y, si hay ambigüedad, se deja sin fecha.</li>
+      <li><strong>Qué se mide:</strong> el <em>retraso informado</em> por las
+          fuentes RT — flota del visor (etiqueta <em>obs.</em>) y predicciones
+          GTFS-RT (etiqueta <em>est.</em>). Son datos distintos y se muestran
+          por separado. <strong>Ninguno es una llegada efectiva verificada.</strong></li>
+      <li><strong>Denominador:</strong> las circulaciones programadas de un
+          snapshot diario capturado del GTFS vigente; una vez cerrado el día,
+          una recarga del horario no puede alterarlo. Esto evita que cambios
+          de GTFS reescriban denominadores históricos.</li>
+      <li><strong>Cobertura:</strong> circulaciones con dato RT / programadas,
+          solo sobre días cerrados y desde el inicio efectivo de la captura
+          de cada fuente. Los días no monitorizados no cuentan como pérdidas.</li>
+      <li><strong>Núcleo:</strong> clasificación verificable desde el GeoJSON
+          oficial de estaciones del visor Renfe; cada ruta CER se adscribe al
+          núcleo mayoritario de sus paradas, con su evidencia publicable
+          (paradas clasificadas/total).</li>
+      <li><strong>Gate estadístico reproducible:</strong> las métricas
+          descriptivas (mediana, P90, distribución) solo se publican si la
+          muestra supera umbrales públicos de tamaño, días observados y
+          cobertura; las comparativas entre líneas permanecen desactivadas
+          mientras no las superen ≥2 unidades. Los umbrales exactos viajan
+          en <code>/api/v1/stats/options</code>.</li>
+    </ul>
+  </div>
+
+  <div class="card">
     <h2 style="margin-top:0;font-size:1rem">Frecuencias</h2>
     <ul>
       <li>Cercanías tiempo real: cada ~25 s (fuentes RT) + ~45 s (flota observada).</li>

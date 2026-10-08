@@ -407,16 +407,17 @@ def stats_delays(feed: str | None = Query(None, pattern="^(cer|ld)$"),
     obs_by_day: dict = {}
     for kind, rows in r["numer"].items():
         for row in rows:
-            obs_by_day.setdefault(str(row["service_date"]), set()).add(kind)
+            k = str(row["service_date"])
+            obs_by_day.setdefault(k, {})[kind] =                 obs_by_day.setdefault(k, {}).get(kind, 0) + 1
     by_day = [{"day": str(x["day"]), "feed": x["feed"],
                "scheduled": x["n"],
-               "kinds_with_data": sorted(obs_by_day.get(str(x["day"]), []))}
+               "with_data": obs_by_day.get(str(x["day"]), {})}
               for x in r["sched_rows"]]
     links = {}
     if station:
         links["station"] = f"/estacion/{station}"
     if frm and to:
-        links["journey"] = f"/trayecto?o={frm}&d={to}"
+        links["journey"] = f"/trayecto?from={frm}&to={to}"
     return {
         "scope": {k: v for k, v in
                   {"feed": feed, "nucleo": nucleo, "line": line,

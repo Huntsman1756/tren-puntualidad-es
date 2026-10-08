@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.4.0] — 2026-10-09
+
+### Sección /estadisticas
+- Nueva página `/estadisticas` con filtros combinables: núcleo de
+  Cercanías (clasificación verificable del GeoJSON oficial del visor
+  Renfe), línea, comunidad autónoma, provincia, estación, trayecto,
+  fechas y franja horaria.
+- Muestra por tipo de dato — siempre separados y etiquetados:
+  **retraso informado** (flota) y **predicción** (GTFS-RT). Ninguno es
+  puntualidad real ni llegada efectiva.
+- Distribución por tramos, mediana, P90, media, circulaciones con dato,
+  circulaciones programadas (snapshot histórico) y cobertura por día.
+- Gate estadístico reproducible (umbrales públicos en
+  `/api/v1/stats/options`): las métricas descriptivas solo se publican
+  si n, días observados y cobertura son defendibles; la comparativa
+  por línea/estación permanece desactivada hasta que ≥2 unidades
+  superen el gate comparativo.
+- Enlaces directos a la ficha de estación y al trayecto original;
+  metodología accesible desde la propia página y /fuentes.
+
+### QA
+- e2e (Playwright, escritorio + móvil) cubre /estadisticas: filtros,
+  gate visible, comparativa y metodología.
+- Tests de integración con frecuencias de sondeo variables, cambios de
+  horario, recargas GTFS, días múltiples y observaciones perdidas.
+
 ## [0.3.4] — 2026-10-09
 
 ### Identidad histórica corregida
