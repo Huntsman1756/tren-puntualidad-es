@@ -315,8 +315,8 @@ def _delay_stats(feed, nucleo, line, ccaa, provincia, station,
         numer = {}
         for kind in ("reported", "prediction"):
             params = dict(p)
-            for f in feeds_scope:
-                params[f"capd_{f}"] = capd[f][kind]
+            for f in ("cer", "ld"):          # binds siempre presentes
+                params[f"capd_{f}"] = (capd.get(f) or {}).get(kind)
             rows = c.execute(text(f"""
                 SELECT DISTINCT ON (o.trip_id, o.service_date, o.feed)
                        o.feed, o.trip_id, o.service_date, o.delay
