@@ -30,11 +30,11 @@ services:
       - coolify
     labels:
       traefik.enable: "true"
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-api.rule: "Host(`${DOMAIN}`) && PathPrefix(`/api`)"
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-api.entrypoints: "https"
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-api.tls.certresolver: "letsencrypt"
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-api.priority: "100"
-      traefik.http.services.${COMPOSE_PROJECT_NAME}-api.loadbalancer.server.port: "8000"
+      traefik.http.routers.trenes-api.rule: "Host(`${DOMAIN}`) && PathPrefix(`/api`)"
+      traefik.http.routers.trenes-api.entrypoints: "https"
+      traefik.http.routers.trenes-api.tls.certresolver: "letsencrypt"
+      traefik.http.routers.trenes-api.priority: "100"
+      traefik.http.services.trenes-api.loadbalancer.server.port: "8000"
     deploy:
       resources:
         limits:
@@ -50,22 +50,22 @@ services:
     labels:
       traefik.enable: "true"
       # HTTPS
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web.rule: "Host(`${DOMAIN}`)"
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web.entrypoints: "https"
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web.tls.certresolver: "letsencrypt"
-      traefik.http.services.${COMPOSE_PROJECT_NAME}-web.loadbalancer.server.port: "4321"
+      traefik.http.routers.trenes-web.rule: "Host(`${DOMAIN}`)"
+      traefik.http.routers.trenes-web.entrypoints: "https"
+      traefik.http.routers.trenes-web.tls.certresolver: "letsencrypt"
+      traefik.http.services.trenes-web.loadbalancer.server.port: "4321"
       # redirección http -> https
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web-http.rule: "Host(`${DOMAIN}`)"
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web-http.entrypoints: "http"
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web-http.middlewares: "${COMPOSE_PROJECT_NAME}-https"
-      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-https.redirectscheme.scheme: "https"
+      traefik.http.routers.trenes-web-http.rule: "Host(`${DOMAIN}`)"
+      traefik.http.routers.trenes-web-http.entrypoints: "http"
+      traefik.http.routers.trenes-web-http.middlewares: "trenes-https"
+      traefik.http.middlewares.trenes-https.redirectscheme.scheme: "https"
       # cabeceras de seguridad
-      traefik.http.routers.${COMPOSE_PROJECT_NAME}-web.middlewares: "${COMPOSE_PROJECT_NAME}-sec"
-      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-sec.headers.stsSeconds: "31536000"
-      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-sec.headers.stsIncludeSubdomains: "true"
-      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-sec.headers.contentTypeNosniff: "true"
-      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-sec.headers.frameDeny: "true"
-      traefik.http.middlewares.${COMPOSE_PROJECT_NAME}-sec.headers.referrerPolicy: "strict-origin-when-cross-origin"
+      traefik.http.routers.trenes-web.middlewares: "trenes-sec"
+      traefik.http.middlewares.trenes-sec.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.trenes-sec.headers.stsIncludeSubdomains: "true"
+      traefik.http.middlewares.trenes-sec.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.trenes-sec.headers.frameDeny: "true"
+      traefik.http.middlewares.trenes-sec.headers.referrerPolicy: "strict-origin-when-cross-origin"
     deploy:
       resources:
         limits:
