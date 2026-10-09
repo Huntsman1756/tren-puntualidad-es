@@ -5,6 +5,7 @@
 - Las filas 'pendiente' nunca se muestran.
 - POST /admin/avisos: alta manual protegida por ADMIN_TOKEN (Bearer).
 """
+import contextlib
 import hashlib
 import hmac
 import json
@@ -212,20 +213,16 @@ def whatsapp_health(now: int | None = None) -> dict:
                 channels.setdefault(slug, {})[field] = _meta_int(v) if field != "degraded" else v
         if k.startswith("whatsapp_stats_"):
             slug = k[len("whatsapp_stats_"):]
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 channels.setdefault(slug, {})["stats"] = json.loads(v)
-            except (TypeError, ValueError):
-                pass
     # agregado por canal (los slugs sin descargas, p. ej. '_all' de
     # contadores globales, no influyen en el estado)
     worst = "ok"
     real = {s: ch for s, ch in channels.items()
             if ch.get("fetch_ok") is not None or ch.get("fetch_err") is not None}
-    for slug, ch in real.items():
+    for ch in real.values():
         ok, err = ch.get("fetch_ok"), ch.get("fetch_err")
-        if ok is None:
-            st = "down"
-        elif err and err > ok:
+        if ok is None or (err and err > ok):
             st = "down"
         elif now - ok > 600:
             st = "stale"
