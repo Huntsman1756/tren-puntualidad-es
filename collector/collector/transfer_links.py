@@ -46,7 +46,7 @@ LINKS = [
         15 * 60,
         "walk",
         "Delicias → Puerta de Atocha (a pie ~700 m + control AV)",
-        "Aceras continuas por Pza. del Emperador Carlos V",
+        "Estimación: aceras continuas por Pza. del Emperador Carlos V",
     ),
     (
         "av_delicias",
@@ -55,7 +55,7 @@ LINKS = [
         12 * 60,
         "walk",
         "Puerta de Atocha → Delicias (a pie ~700 m)",
-        "Aceras continuas por Pza. del Emperador Carlos V",
+        "Estimación: aceras continuas por Pza. del Emperador Carlos V",
     ),
     # Embajadores ↔ Puerta de Atocha (~1 km; el GTFS CER ya une
     # Embajadores↔Atocha Cercanías con 19 min en transfers.txt)
@@ -66,7 +66,7 @@ LINKS = [
         18 * 60,
         "walk",
         "Embajadores → Puerta de Atocha (a pie ~1 km + control AV)",
-        "Recorrido peatonal por Rda. de Atocha",
+        "Estimación: recorrido por Rda. de Atocha; coherente con transfers.txt GTFS (1140 s)",
     ),
     (
         "av_embajadores",
@@ -75,7 +75,7 @@ LINKS = [
         15 * 60,
         "walk",
         "Puerta de Atocha → Embajadores (a pie ~1 km)",
-        "Recorrido peatonal por Rda. de Atocha",
+        "Estimación: recorrido por Rda. de Atocha; coherente con transfers.txt GTFS (1140 s)",
     ),
     # --- Málaga: M.Z. Cercanías (54500) y María Zambrano AV (54413) son
     #     vestíbulos contiguos del mismo edificio (134 m entre puntos GTFS)
@@ -106,7 +106,7 @@ LINKS = [
         18 * 60,
         "walk",
         "València Nord → Joaquín Sorolla (a pie ~1 km + control AV)",
-        "Recorrido peatonal señalizado oficial",
+        "Lanzadera/peatonal señalizado oficial Renfe-ADIF",
     ),
     (
         "valencia_js_nord",
@@ -115,7 +115,7 @@ LINKS = [
         15 * 60,
         "walk",
         "Joaquín Sorolla → València Nord (a pie ~1 km)",
-        "Recorrido peatonal señalizado oficial",
+        "Lanzadera/peatonal señalizado oficial Renfe-ADIF",
     ),
     # la parada Nord existe también en feed cer (mismo stop_id)
     (
@@ -125,7 +125,7 @@ LINKS = [
         18 * 60,
         "walk",
         "València Nord → Joaquín Sorolla (a pie ~1 km + control AV)",
-        "Recorrido peatonal señalizado oficial",
+        "Lanzadera/peatonal señalizado oficial Renfe-ADIF",
     ),
     (
         "valencia_js_cer",
@@ -134,7 +134,7 @@ LINKS = [
         15 * 60,
         "walk",
         "Joaquín Sorolla → València Nord (a pie ~1 km)",
-        "Recorrido peatonal señalizado oficial",
+        "Lanzadera/peatonal señalizado oficial Renfe-ADIF",
     ),
     # --- Barcelona: Pl. Catalunya (Rodalies, 78805) ↔ Passeig de Gràcia
     #     (MD/LD, 71802), ~590 m por Rambla de Catalunya
@@ -145,7 +145,7 @@ LINKS = [
         12 * 60,
         "walk",
         "Plaça de Catalunya → Passeig de Gràcia (a pie ~600 m)",
-        "Recorrido peatonal urbano documentado",
+        "Estimación: recorrido peatonal urbano",
     ),
     (
         "bcn_pg_cat",
@@ -154,7 +154,7 @@ LINKS = [
         9 * 60,
         "walk",
         "Passeig de Gràcia → Plaça de Catalunya (a pie ~600 m)",
-        "Recorrido peatonal urbano documentado",
+        "Estimación: recorrido peatonal urbano",
     ),
     # Estació de França (79400) ↔ Arc de Triomf (78804), ~900 m
     (
@@ -164,7 +164,7 @@ LINKS = [
         13 * 60,
         "walk",
         "Estació de França → Arc de Triomf (a pie ~900 m)",
-        "Recorrido peatonal urbano documentado",
+        "Estimación: recorrido peatonal urbano",
     ),
     (
         "bcn_arc_franca",
@@ -173,7 +173,7 @@ LINKS = [
         15 * 60,
         "walk",
         "Arc de Triomf → Estació de França (a pie ~900 m)",
-        "Recorrido peatonal urbano documentado",
+        "Estimación: recorrido peatonal urbano",
     ),
     # --- Figueres: estación urbana (79309) ↔ Vilafant AV (04307), ~2 km
     (
@@ -183,7 +183,7 @@ LINKS = [
         30 * 60,
         "walk",
         "Figueres → Figueres-Vilafant (a pie ~2 km + control AV)",
-        "Recorrido peatonal existente; habitual taxi/lanzadera",
+        "Estimación: ~2 km peatonal; alternativa habitual bus/taxi",
     ),
     (
         "vilafant_figueres",
@@ -192,7 +192,7 @@ LINKS = [
         27 * 60,
         "walk",
         "Figueres-Vilafant → Figueres (a pie ~2 km)",
-        "Recorrido peatonal existente; habitual taxi/lanzadera",
+        "Estimación: ~2 km peatonal; alternativa habitual bus/taxi",
     ),
     # --- Bilbao: Abando Intermodal (ld 13200) ↔ La Concordia (cer 05451),
     #     176 m enfrente — desde 2025 ambas en el complejo intermodal
@@ -222,7 +222,7 @@ LINKS = [
         9 * 60,
         "walk",
         "Zabalburu → Abando (a pie ~500 m)",
-        "Recorrido peatonal urbano documentado",
+        "Estimación: recorrido peatonal urbano",
     ),
     (
         "abando_zabalburu",
@@ -231,27 +231,13 @@ LINKS = [
         7 * 60,
         "walk",
         "Abando → Zabalburu (a pie ~500 m)",
-        "Recorrido peatonal urbano documentado",
+        "Estimación: recorrido peatonal urbano",
     ),
-    # --- León: estación principal (ld 15100) ↔ Feve-León (cer 05778), ~940 m
-    (
-        "leon_feve",
-        ("ld", "15100"),
-        ("cer", "05778"),
-        15 * 60,
-        "walk",
-        "León → Feve-León (a pie ~950 m)",
-        "Recorrido peatonal urbano documentado",
-    ),
-    (
-        "feve_leon",
-        ("cer", "05778"),
-        ("ld", "15100"),
-        16 * 60,
-        "walk",
-        "Feve-León → León (a pie ~950 m)",
-        "Recorrido peatonal urbano documentado",
-    ),
+    # --- León (15100) ↔ Feve-León (05778): EXCLUIDO 2026-10-09.
+    #     La terminal de vía estrecha se integró en la estación intermodal
+    #     de León en 2025; el enlace a pie ya no tiene justificación
+    #     suficiente. Reevaluar solo si el GTFS sigue sirviendo 05778 y se
+    #     verifica la disposición actual del complejo.
     # --- Oviedo: estación principal (ld 15211) ↔ Vallobín (cer 05300),
     #     ~820 m (antigua terminal de vía estrecha)
     (
@@ -261,7 +247,7 @@ LINKS = [
         14 * 60,
         "walk",
         "Oviedo → Vallobín (a pie ~850 m)",
-        "Recorrido peatonal urbano documentado",
+        "Estimación: recorrido peatonal urbano",
     ),
     (
         "vallobin_oviedo",
@@ -270,7 +256,7 @@ LINKS = [
         15 * 60,
         "walk",
         "Vallobín → Oviedo (a pie ~850 m)",
-        "Recorrido peatonal urbano documentado",
+        "Estimación: recorrido peatonal urbano",
     ),
     # --- Vigo: Urzaiz (ld 08223) ↔ Guixar (ld 22308), ~600 m por túnel
     (
@@ -280,7 +266,7 @@ LINKS = [
         12 * 60,
         "walk",
         "Vigo-Urzaiz → Vigo-Guixar (a pie ~600 m)",
-        "Conexión peatonal entre estaciones de Vigo",
+        "Estimación: ~600 m entre las dos terminales de Vigo",
     ),
     (
         "vigo_guixar_urzaiz",
@@ -289,7 +275,7 @@ LINKS = [
         12 * 60,
         "walk",
         "Vigo-Guixar → Vigo-Urzaiz (a pie ~600 m)",
-        "Conexión peatonal entre estaciones de Vigo",
+        "Estimación: ~600 m entre las dos terminales de Vigo",
     ),
 ]
 

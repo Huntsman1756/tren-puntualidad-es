@@ -193,15 +193,16 @@ const others = (inc?.items || []).filter((a: any) => a.relevance === 'line_other
                 </span>
               </div>
               <span class={`badge x-${x.risk}`}>
-                {x.risk === 'ok' ? 'holgado' : x.risk === 'tight' ? 'justo' : 'riesgo RT'}
+                {x.risk === 'ok' ? 'margen suficiente' : x.risk === 'tight' ? 'justo' : x.risk === 'risky' ? 'riesgo RT' : 'sin datos RT'}
               </span>
             </div>
           );
         })}
       </div>
       <p class="muted legend">Solo enlaces verificados (misma estación, estación contigua del
-        catálogo o correspondencia oficial). justo = margen estrecho; riesgo RT = la estimación
-        en tiempo real ya no cubre el cambio mínimo — plan alternativo recomendado.</p>
+        catálogo o correspondencia oficial). margen suficiente = holgado con los datos
+        disponibles, no garantizado; justo = margen estrecho; riesgo RT = la estimación en
+        tiempo real ya no cubre el mínimo; sin datos RT = falta señal en algún tramo.</p>
     </div>
   )}
 </Base>
@@ -249,6 +250,7 @@ const others = (inc?.items || []).filter((a: any) => a.relevance === 'line_other
   .badge.x-ok { background: #14532d; color: #bbf7d0; }
   .badge.x-tight { background: #713f12; color: #fde68a; }
   .badge.x-risky { background: #7f1d1d; color: #fecaca; }
+  .badge.x-unknown { background: #334155; color: #cbd5e1; }
   .legend { font-size: .75rem; margin: .6rem 0 0; }
   @media (max-width: 560px) {
     .xrow { grid-template-columns: minmax(0,1fr) auto; }

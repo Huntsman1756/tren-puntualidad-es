@@ -1,7 +1,7 @@
 // QA e2e v0.3.4 (escritorio + móvil): identidad de líneas, incidencias,
 // planificador con fechas futuras, navegación. BASE = URL de la web.
 //   BASE=http://127.0.0.1:4381 node v034.mjs
-import { chromium } from 'playwright';
+import { chromium, firefox, webkit } from 'playwright';
 import { mkdirSync } from 'node:fs';
 
 const BASE = process.env.BASE || 'https://trenes.h1756.es';
@@ -14,7 +14,10 @@ const TODAY = madrid();
 const D1 = (() => { const [y, m, d] = TODAY.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10); })();
 
-const b = await chromium.launch();
+const BROWSER = process.env.BROWSER || 'chromium';
+const ENGINE = { chromium, firefox, webkit }[BROWSER];
+const b = await ENGINE.launch();
+console.log('browser:', BROWSER);
 let fails = 0, oks = 0;
 async function run(name, mobile, fn) {
   const ctx = await b.newContext({

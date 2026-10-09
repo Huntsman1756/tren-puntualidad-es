@@ -54,8 +54,6 @@ def test_walking_link_between_stations(client):
 
 def test_min_slack_excludes_impossible(client, scenario):
     """Un segundo tramo que sale antes de arr1+slack no se ofrece."""
-    from sqlalchemy import text
-
     with scenario.begin() as c:
         # LD casi imposible: sale de ld:17000 6 min después de que el C4b
         # llegue a cer:17000 (slack misma estación cer→ld = 15 min).
@@ -91,29 +89,51 @@ def test_no_verified_link_no_transfer(client):
 
 
 def test_risky_when_rt_breaks_slack(client, scenario):
-    """Hoy: si el RT estima buffer < slack se etiqueta 'risky', no se oculta."""
+    """Hoy: si el RT estima buffer < slack se etiqueta 'risky', no se oculta.
+    Requiere RT en AMBOS tramos; con RT solo en uno el estado es 'unknown'."""
     now = int(time.time())
     with scenario.begin() as c:
-        # MAD_C4B_0755 lleva 40 min de retraso estimado al llegar al enlace:
-        # arr est. 08:55 vs dep2 09:00 -> buffer_rt 5 min < slack 15 min
+        # MAD_C4B_0755 llega est. 08:55 (+2400 s); LD_03110 sale de 60000
+        # est. 09:01 (+60 s): buffer_rt ~6 min < slack 15 min
         c.execute(
             text("""INSERT INTO rt_stop_update
             (feed,trip_id,stop_id,delay,time,updated_at)
-            VALUES('cer','MAD_C4B_0755','17000',2400,:t,:t)"""),
+            VALUES('cer','MAD_C4B_0755','17000',2400,:t,:t),
+                  ('ld','LD_03110','60000',60,:t,:t)"""),
             {"t": now},
         )
     j = plan(client, date=str(TODAY), time="07:00", hours=2)
-    xr = [i for i in j["transfers"] if (i["leg1"] or {}).get("trip_id") == "MAD_C4B_0755"]
+    xr = [
+        i
+        for i in j["transfers"]
+        if (i["leg1"] or {}).get("trip_id") == "MAD_C4B_0755"
+        and (i["leg2"] or {}).get("trip_id") == "LD_03110"
+    ]
     assert xr, "debe seguir ofreciendo la conexión"
     assert all(i["risk"] == "risky" for i in xr)
     assert xr[0]["transfer"]["buffer_rt_sec"] < xr[0]["transfer"]["slack_sec"]
 
 
+def test_unknown_when_rt_missing_on_a_leg(client, scenario):
+    """Hoy sin RT en el segundo tramo: el riesgo es 'unknown', nunca 'ok'."""
+    now = int(time.time())
+    with scenario.begin() as c:
+        c.execute(
+            text("""INSERT INTO rt_stop_update
+            (feed,trip_id,stop_id,delay,time,updated_at)
+            VALUES('cer','MAD_C4B_0755','17000',0,:t,:t)"""),
+            {"t": now},
+        )
+    j = plan(client, date=str(TODAY), time="07:00", hours=2)
+    xr = [i for i in j["transfers"] if (i["leg1"] or {}).get("trip_id") == "MAD_C4B_0755" and i["leg2"]]
+    assert xr
+    # sin RT del segundo tramo no podemos afirmar margen
+    assert all(i["risk"] == "unknown" for i in xr)
+
+
 def test_transfer_next_day_leg2(client, scenario):
     """T1 nocturno + T2 de la madrugada siguiente: el día del tramo 2 puede
     ser day+1 y el dep_eff lo refleja."""
-    from sqlalchemy import text
-
     with scenario.begin() as c:
         c.execute(
             text("""INSERT INTO trips VALUES
@@ -156,3 +176,64 @@ def test_transfers_disabled_param(client):
     j = plan(client, date=str(D1), transfers="false")
     assert j["transfers"] == []
     assert j["status"] in ("needs_transfer", "different_networks", "no_direct_window")
+
+
+def _gt(conn, sql_rows):
+    conn.execute(
+        text(
+            "INSERT INTO gtfs_transfer(feed,from_stop_id,to_stop_id,"
+            "from_route_id,to_route_id,from_trip_id,to_trip_id,"
+            "transfer_type,min_transfer_time) VALUES " + sql_rows
+        )
+    )
+
+
+def test_gtfs_min_transfer_time_raises_slack(client, scenario):
+    """transfers.txt type 2 (mínimo obligatorio) eleva el slack: una
+    conexión válida por defecto deja de ofrecerse si el GTFS exige más."""
+    with scenario.begin() as c:
+        # regla a nivel parada: 17000→17000 exige 1 h de cambio
+        _gt(c, "('cer','17000','17000','','','','',2,3600)")
+    # el C4b llega 08:15 y el C2 sale 09:00 -> 45 min < 60 min: fuera
+    j = plan(client, **{"from": "cer:18000", "to": "cer:15211"}, date=str(D1))
+    assert all((i["leg2"] or {}).get("trip_id") != "MAD_C2_0900" for i in j["transfers"])
+
+
+def test_gtfs_type3_forbids_even_with_manual_edge(client, scenario):
+    """transfer_type=3 en el nivel aplicable prohíbe la conexión; ningún
+    enlace (manual, misma parada ni gtfs) la rescata."""
+    with scenario.begin() as c:
+        # prohibición route-scoped para el T1 del fixture
+        _gt(c, "('cer','17000','17000','10T0013C4a','','','',3,NULL)")
+    j = plan(client, **{"from": "cer:18000", "to": "cer:15211"}, date=str(D1))
+    assert all((i["leg2"] or {}).get("trip_id") != "MAD_C2_0900" for i in j["transfers"])
+
+
+def test_gtfs_precedence_route_beats_stop(client, scenario):
+    """La regla route-scoped gana a la de parada: un tipo 0/1 con route
+    permite lo que una type 2 a nivel parada restringiría."""
+    with scenario.begin() as c:
+        _gt(c, "('cer','17000','17000','','','','',2,3600)")  # 1 h
+        _gt(c, "('cer','17000','17000','10T0013C4a','','','',0,NULL)")  # permite
+    j = plan(client, **{"from": "cer:18000", "to": "cer:15211"}, date=str(D1))
+    assert any((i["leg2"] or {}).get("trip_id") == "MAD_C2_0900" for i in j["transfers"]), (
+        "la regla route-scoped debe prevalecer sobre la de parada"
+    )
+
+
+def test_gtfs_type3_not_applicable_other_route(client, scenario):
+    """Un type 3 con from_route ajeno a T1 no prohibe nada."""
+    with scenario.begin() as c:
+        _gt(c, "('cer','17000','17000','60T0009C3','','','',3,NULL)")
+    j = plan(client, **{"from": "cer:18000", "to": "cer:15211"}, date=str(D1))
+    assert any((i["leg2"] or {}).get("trip_id") == "MAD_C2_0900" for i in j["transfers"])
+
+
+def test_plan_dst_boundary_date_no_crash(client):
+    """Cambio de hora Europe/Madrid: una fecha fuera de cobertura responde
+    limpio; las horas GTFS son nominales (segundos desde medianoche local)
+    y el slack se evalúa siempre en ese mismo reloj."""
+    j = plan(client, date="2026-10-25")  # domingo DST Europe/Madrid (fall back)
+    assert j["status"] == "out_of_coverage"
+    j = plan(client, date="2026-03-29")  # DST spring forward
+    assert j["status"] == "out_of_coverage"

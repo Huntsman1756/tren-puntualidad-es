@@ -65,8 +65,14 @@
   slack por defecto cer→cer 5′, cer→ld/ld→ld 15′, ld→cer 10′. Enlaces
   tipo leg0 (caminar al origen) y leg3 (caminar al destino) incluidos.
   Estado nuevo `transfer_only`; `transfers` siempre se devuelve en /plan.
-- Riesgo: `ok`/`tight` (<1,5×slack)/`risky` (RT estimado incumple slack —
-  se muestra, nunca se oculta).
+- Riesgo: `ok` (margen ≥1,5×slack con datos suficientes — nunca
+  garantizado), `tight` (ajustado), `risky` (RT estimado incumple slack —
+  se muestra, nunca se oculta), `unknown` (hoy y falta RT o desactualizado
+  >15 min en alguno de los dos tramos).
+- Precedencia GTFS en transfers.txt: por pareja (T1,T2) solo aplican las
+  reglas del nivel más específico presente (trip > route > stop); un
+  transfer_type=3 aplicable prohíbe la conexión incluidos los enlaces
+  manuales; tipos 4/5 = continuidad a bordo / apeo en la misma parada.
 
 ## Adaptador RadarDeTrenes (opcional)
 
