@@ -11,7 +11,7 @@ def test_evaluate_shape_valid_partial_unused():
     st_on = [(40.0 + i * 0.02, -3.7) for i in range(10)]
     assert evaluate_shape(line, st_on)["status"] == "valid"
     # estaciones que la shape no alcanza (shape incompleta)
-    st_far = st_on + [(40.5, -3.7), (40.6, -3.7)]
+    st_far = [*st_on, (40.5, -3.7), (40.6, -3.7)]
     ev = evaluate_shape(line, st_far)
     assert ev["status"] == "partial" and ev["near"] == 10
     assert evaluate_shape(line, [])["status"] == "unused"
