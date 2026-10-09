@@ -53,9 +53,9 @@ const elsewhere = (inc?.items || []).filter((a: any) => a.relevance === 'line_ot
   </div>
   <p class="muted">{networks.join(' + ')}
     {infos[0].geo && (
-      <> · {infos[0].geo.poblacion && <>{infos[0].geo.poblacion} · </>}
+      <span class="geo-line"> · {infos[0].geo.poblacion && <>{infos[0].geo.poblacion} · </>}
         <a href={`/provincias/${infos[0].geo.provincia_slug}`}>{infos[0].geo.provincia}</a> ·{' '}
-        <a href={`/comunidades/${infos[0].geo.ccaa_slug}`}>{infos[0].geo.ccaa}</a></>
+        <a href={`/comunidades/${infos[0].geo.ccaa_slug}`}>{infos[0].geo.ccaa}</a></span>
     )}
   </p>
   {lines.length > 0 && (
