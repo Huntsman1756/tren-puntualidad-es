@@ -237,3 +237,98 @@ def test_plan_dst_boundary_date_no_crash(client):
     assert j["status"] == "out_of_coverage"
     j = plan(client, date="2026-03-29")  # DST spring forward
     assert j["status"] == "out_of_coverage"
+
+
+def test_gtfs_edge_creates_inter_stop_transfer(client, scenario):
+    """Un enlace GTFS entre paradas distintas (tipo 0/1/2) genera la
+    conexión: T1 llega a 17000, enlace oficial 17000->18000 y T2 sale de
+    18000. Sin la arista GTFS ese transbordo no existe."""
+    with scenario.begin() as c:
+        _gt(c, "('cer','17000','18000','','','','',2,480)")
+    j = plan(client, **{"from": "cer:18000", "to": "cer:10000"}, date=str(D1))
+    xs = [i for i in j["transfers"] if (i["leg2"] or {}).get("trip_id") == "MAD_C5_0930"]
+    assert xs, "el enlace oficial 17000->18000 debe crear la opción"
+    assert xs[0]["transfer"]["to_stop"] == "18000"
+    assert xs[0]["transfer"]["slack_sec"] == 480
+
+
+def test_prohibition_is_scoped_to_to_stop(client, scenario):
+    """Un type 3 X->18000 no contamina X->15410: misma parada origen,
+    destinos distintos, la prohibición solo cierra su propio enlace."""
+
+    with scenario.begin() as c:
+        _gt(c, "('cer','17000','18000','','','','',2,480)")
+        _gt(c, "('cer','17000','15410','','','','',0,NULL)")
+        _gt(c, "('cer','17000','18000','10T0013C4a','','','',3,NULL)")
+    # 17000->18000 prohibido para el T1 (regla route-scoped): sin MAD_C5
+    j = plan(client, **{"from": "cer:18000", "to": "cer:10000"}, date=str(D1))
+    assert all(
+        (i["leg2"] or {}).get("trip_id") != "MAD_C5_0930" for i in j["transfers"]
+    ), "la prohibición route-scoped a 18000 debe cerrar ese enlace"
+    # pero 17000->15410 sigue abierto para el mismo T1
+    j = plan(client, **{"from": "cer:18000", "to": "cer:99998"}, date=str(D1))
+    assert any(
+        (i["leg2"] or {}).get("trip_id") == "MAD_C9_0935" for i in j["transfers"]
+    ), "la prohibición X->18000 no debe contaminar X->15410"
+
+
+def test_walk_origin_respects_requested_time(client):
+    """Leg0: la caminata debe empezar dentro de la ventana pedida.
+    LD_03110 sale 09:00 con slack 15 min -> caminar desde las 08:45."""
+    early = plan(
+        client,
+        **{"from": "cer:18000", "to": "ld:71801"},
+        date=str(TODAY),
+        time="08:00",
+        hours=2,
+    )
+    late = plan(
+        client,
+        **{"from": "cer:18000", "to": "ld:71801"},
+        date=str(TODAY),
+        time="08:50",
+        hours=2,
+    )
+    leg0_early = [i for i in early["transfers"] if i["leg1"] is None]
+    leg0_late = [i for i in late["transfers"] if i["leg1"] is None]
+    assert leg0_early, "a las 08:00 debe ofrecerse caminar a las 08:45"
+    assert not leg0_late, "a las 08:50 ya no da tiempo: no debe ofrecerse"
+
+
+def test_order_and_names_on_full_page(client, scenario):
+    """Más de 20 candidatos: los 20 devueltos van ordenados por llegada y
+    TODOS llevan nombres (enriquecer tras ordenar, nunca antes)."""
+    from sqlalchemy import text
+
+    with scenario.begin() as c:
+        for i in range(26):  # 26 trenes LD desde 60000, cada 20 min
+            tid = f"LD_05{i:02d}"
+            dep = 9 * 3600 + i * 1200
+            c.execute(
+                text(
+                    "INSERT INTO trips (feed,trip_id,route_id,service_id,"
+                    "train_number) VALUES('ld',:t,'LD_AVE_MAD_BCN','S_ALL',:n)"
+                ),
+                {"t": tid, "n": f"05{i:02d}"},
+            )
+            c.execute(
+                text(
+                    "INSERT INTO stop_times (feed,trip_id,seq,stop_id,arr,dep)"
+                    " VALUES('ld',:t,1,'60000',:d,:d),"
+                    "('ld',:t,2,'71801',:a,:a)"
+                ),
+                {"t": tid, "d": dep, "a": dep + 9000},
+            )
+    j = plan(
+        client,
+        **{"from": "cer:18000", "to": "ld:71801"},
+        date=str(D1),
+        hours=12,
+    )
+    xs = j["transfers"]
+    assert len(xs) == 20
+    arrs = [i["arr_epoch"] for i in xs]
+    assert arrs == sorted(arrs), "ordenados por llegada efectiva"
+    assert all(i["transfer"]["to_name"] for i in xs), "todos con nombre"
+    # el más rápido es el que llega antes, no el primero generado
+    assert xs[0]["arr_epoch"] == min(arrs)

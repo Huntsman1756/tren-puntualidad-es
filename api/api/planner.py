@@ -97,25 +97,55 @@ def _edges():
     return _edges_cache
 
 
-def _targets(feed, stop_id):
-    """Enlaces estructurales + catálogo manual (sin reglas gtfs: esas se
-    evalúan por pareja T1,T2 en `_rule_for`)."""
-    out = [{"to": (feed, stop_id), "slack": SLACK[(feed, feed)], "kind": "same_stop", "label": None}]
+def _all_edges(feed, stop_id):
+    """Candidatos de enlace desde (feed, stop_id): mismo stop_id
+    (estructural), mismo stop_id entre feeds (misma estación), catálogo
+    manual verificado Y aristas de transfers.txt a OTRA parada (tipos
+    0/1/2; el tipo 5 se modela como transbordo en la misma parada y el 4
+    es continuidad a bordo, no enlace peatonal). Deduplicadas por
+    (feed,to_stop) quedándose el mayor slack aplicable; las reglas con
+    filtros route/trip se validan luego por pareja en `_rule_for`."""
     other = "ld" if feed == "cer" else "cer"
-    out.append({"to": (other, stop_id), "slack": SLACK[(feed, other)], "kind": "same_station", "label": None})
-    out += _edges()["links"].get((feed, stop_id), [])
-    return out
+    by_to = {
+        (feed, stop_id): {"to": (feed, stop_id), "slack": SLACK[(feed, feed)], "kind": "same_stop", "label": None},
+        (other, stop_id): {"to": (other, stop_id), "slack": SLACK[(feed, other)], "kind": "same_station", "label": None},
+    }
+    for e in _edges()["links"].get((feed, stop_id), []):
+        prev = by_to.get(e["to"])
+        if prev:
+            prev["slack"] = max(prev["slack"], e["slack"])
+            if prev["kind"] in ("same_stop", "same_station"):
+                prev.update(kind=e["kind"], label=e.get("label"))
+        else:
+            by_to[e["to"]] = dict(e)
+    for g in _edges()["gtfs"].get((feed, stop_id), []):
+        if g["ttype"] not in (0, 1, 2) or g["to_stop"] == stop_id:
+            continue
+        slack = g["min_secs"] if g["min_secs"] is not None else SLACK[(feed, feed)]
+        key = (feed, g["to_stop"])
+        prev = by_to.get(key)
+        if prev:
+            prev["slack"] = max(prev["slack"], slack)
+            if prev["kind"] in ("same_stop", "same_station"):
+                prev["kind"] = "gtfs_transfer"
+        else:
+            by_to[key] = {"to": key, "slack": slack, "kind": "gtfs_transfer", "label": None}
+    return list(by_to.values())
 
 
-def _rule_for(rules, t1_route, t1_trip, t2_route, t2_trip):
-    """Reglas transfers.txt aplicables a la pareja (T1,T2) en el nivel de
-    especificidad MÁS alto presente (trip > route > stop).
+def _rule_for(rules, to_stop, t1_route, t1_trip, t2_route, t2_trip):
+    """Reglas transfers.txt aplicables a (from)->`to_stop` para la pareja
+    (T1,T2) en el nivel de especificidad MÁS alto presente
+    (trip > route > stop). Solo evalúa reglas cuyo `to_stop_id` coincide:
+    una prohibición o mínimo X->Z no contamina X->Y.
 
     Devuelve (forbidden: bool, min_secs: int|None).
     Una prohibición (type 3) en el nivel aplicable invalida la conexión
     incluidos los enlaces manuales o estructurales a esa misma parada."""
     best, chosen = -1, []
     for g in rules:
+        if g["to_stop"] != to_stop:
+            continue
         rank = 0
         if g["from_trip"] or g["to_trip"]:
             if g["from_trip"] and g["from_trip"] != t1_trip:
@@ -256,7 +286,7 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
         for s in downstream.get((feed1, tid), [])[:MAX_DOWNSTREAM]:
             x = s[0]
             if (feed1, x) not in edges_by_x:
-                edges_by_x[(feed1, x)] = _targets(feed1, x)
+                edges_by_x[(feed1, x)] = _all_edges(feed1, x)
                 gtfs_by_x[(feed1, x)] = _edges()["gtfs"].get((feed1, x), [])
                 for e in edges_by_x[(feed1, x)]:
                     f2, y = e["to"]
@@ -268,7 +298,7 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
     # hasta el destino real (X → destino)
     walk_from = []  # [(origen_pair, edge)]
     for o in f_pairs:
-        for e in _targets(o[0], o[1]):
+        for e in _all_edges(o[0], o[1]):
             if e["kind"] == "same_stop":
                 continue  # mismo (feed,stop): es un viaje directo, no enlace
             f2, y = e["to"]
@@ -404,7 +434,7 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
             for e in dest_edges.get((feed1, x), []):
                 f_d, s_d = e["to"]
                 # las prohibiciones gtfs desde X también rigen este cierre
-                forbidden, _ = _rule_for(dest_rules.get((feed1, x), []), lg1["route_id"], tid1, None, None)
+                forbidden, _ = _rule_for(dest_rules.get((feed1, x), []), s_d, lg1["route_id"], tid1, None, None)
                 if forbidden:
                     continue
                 arr_d = arr_x_eff + e["slack"]
@@ -454,7 +484,7 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
                     # precedencia GTFS: regla aplicable de mayor
                     # especificidad para ESTA pareja T1,T2
                     forbidden, min_s = _rule_for(
-                        gtfs_by_x.get((feed1, x), []), lg1["route_id"], tid1, r2["route_id"], tid2
+                        gtfs_by_x.get((feed1, x), []), y, lg1["route_id"], tid1, r2["route_id"], tid2
                     )
                     if forbidden:
                         continue  # prohibición aplicable: ni manual ni gtfs
@@ -525,13 +555,15 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
             tid2 = r2["trip_id"]
             if cancelled(f2, tid2):
                 continue
-            forbidden, _ = _rule_for(origin_rules.get((f_o, s_o), []), None, None, r2["route_id"], tid2)
+            forbidden, _ = _rule_for(origin_rules.get((f_o, s_o), []), y, None, None, r2["route_id"], tid2)
             if forbidden:
                 continue
             dep2 = midnight + r2["dep_eff"]
             dep2_est, d2d = est(f2, tid2, y, dep2)
             walk_start = dep2 - e["slack"]  # hora prudente de inicio
-            if walk_start < t0:  # no da tiempo ni programado
+            # dep2 es epoch; t0 son segundos desde medianoche local:
+            # normalizar comparándolo en el mismo reloj nominal
+            if walk_start - midnight < t0:  # no da tiempo ni programado
                 continue
             arr_dest = midnight + r2["arr_eff"]
             arr_dest_est, _ = est(f2, tid2, r2["dest"], arr_dest)
@@ -578,9 +610,12 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
                     "duration_sec": arr_eff - walk_start,
                 }
             )
-    # ---- nombres de las paradas citadas en los resultados
+    out.sort(key=lambda j: (j["arr_epoch"], j["dep_epoch"]))
+    out = out[:limit]
+    # ---- nombres de las paradas citadas en los resultados DEFINITIVOS
+    # (ordenar primero: enriquecer solo los devueltos, nunca los descartados)
     keys = set()
-    for j in out[:limit]:
+    for j in out:
         t = j["transfer"]
         keys.add((t["at_feed"], t["at_stop"]))
         keys.add((t["to_feed"], t["to_stop"]))
@@ -599,7 +634,7 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
                 {"f": feeds, "s": ids},
             ):
                 names[(r[0], r[1])] = r[2]
-    for j in out[:limit]:
+    for j in out:
         t = j["transfer"]
         t["at_name"] = names.get((t["at_feed"], t["at_stop"]))
         t["to_name"] = names.get((t["to_feed"], t["to_stop"]))
@@ -608,5 +643,4 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
         if j["leg2"]:
             j["leg2"]["from_name"] = names.get((j["leg2"]["feed"], j["leg2"]["from_stop"]))
             j["leg2"]["to_name"] = names.get((j["leg2"]["feed"], j["leg2"]["to_stop"]))
-    out.sort(key=lambda j: (j["arr_epoch"], j["dep_epoch"]))
-    return out[:limit]
+    return out

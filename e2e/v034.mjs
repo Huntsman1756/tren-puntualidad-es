@@ -18,6 +18,14 @@ const BROWSER = process.env.BROWSER || 'chromium';
 const ENGINE = { chromium, firefox, webkit }[BROWSER];
 const b = await ENGINE.launch();
 console.log('browser:', BROWSER);
+// arranque en frío (JIT/perfil del motor): una navegación de calentamiento
+// para que el primer test no mida el arranque del navegador
+{
+  const w = await b.newPage();
+  await w.goto(BASE, { waitUntil: 'load', timeout: 60000 }).catch(() => {});
+  await w.waitForTimeout(500).catch(() => {});
+  await w.context().close();
+}
 let fails = 0, oks = 0;
 async function run(name, mobile, fn) {
   const ctx = await b.newContext({
@@ -214,7 +222,11 @@ for (const mob of [false, true]) {
 
   await run('sin scroll horizontal', mob, async (pg) => {
     for (const u of ['/', '/lineas/madrid/c4', '/incidencias', `/trayecto?from=cer:17000&to=cer:18000`, '/retrasos?vista=lineas', '/mapa/madrid']) {
-      await pg.goto(BASE + u, { waitUntil: 'domcontentloaded' });
+      // 'load' (no solo DOM): las peticiones de módulos/fetch deben
+      // terminar antes de navegar fuera, si no WebKit las reporta como
+      // pageerror ("access control checks" al abortar fetch en vuelo)
+      await pg.goto(BASE + u, { waitUntil: 'load' });
+      await pg.waitForTimeout(300);
       const over = await pg.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
       expect(over <= 2, `${u}: desborda ${over}px`);
     }
