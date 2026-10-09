@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.3.9] — 2026-10-09
+### Detector de posibles incidencias calibrado
+- Se calcula en el collector cada minuto y se guarda con historial
+  (`anomaly_episode`, `anomaly_sample`).
+- Regla con magnitud y proporción: ≥3 trenes con dato y (≥3 con +15 min y
+  ≥20 % de los monitorizados, o ≥2 y ≥50 %). 3 de 100 ya no cuenta como 21 de 32.
+- Ciclo de vida: en observación → confirmada (persiste ≥5 min, ≥3
+  evaluaciones) → resuelta (≥9–10 min cubiertos por muestras frescas sin
+  señal). Si el tiempo real se cae, el episodio se congela (`rt_gap_since`):
+  nunca se resuelve por falta de datos.
+- Siempre se muestran trenes afectados, con dato y programados, porcentaje,
+  pico, inicio, confirmación y evolución (mini-gráfica).
+### Feed oficial: descarga y cambio de contenido por separado
+- Huella SHA-256 de las entidades del feed de avisos: `content_changed_at`
+  (último cambio real) independiente de la última descarga correcta. El primer
+  arranque toma la fecha de la cabecera, así un feed congelado nunca parece
+  recién actualizado.
+### Avisos oficiales de los canales de Renfe (WhatsApp)
+- `official_notice` + parser de textos oficiales (línea, estación del
+  problema vs. origen/destino, tipo, efectos). «Subsanada» = en recuperación,
+  no normalizada. Hilos por línea + estación/problema: una actualización de la
+  C5 no cierra la C4b. Sin novedades en 6 h → «sin actualizar», nunca resuelta.
+- Entrada manual autenticada `POST /api/v1/admin/avisos` (ADMIN_TOKEN) y
+  `scripts/aviso.sh`; lectura automática vía WAHA preparada pero
+  **desactivada** (perfil `waha`, ver `docs/whatsapp-waha.md`).
+- Web: secciones separadas «Avisos oficiales (canales de Renfe)», «Avisos del
+  feed oficial GTFS-RT» y «Posibles incidencias inferidas».
+
 ## [0.3.8] — 2026-10-09
 ### Incidencias cuando el feed oficial no se actualiza
 - Verificado: el feed GTFS-RT de avisos de Renfe (y el del visor) no cambia

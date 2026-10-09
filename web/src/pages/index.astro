@@ -4,32 +4,39 @@ import Planner from '../components/Planner.svelte';
 import FavJourneys from '../components/FavJourneys.svelte';
 import RankList from '../components/RankList.svelte';
 import IncidentSignals from '../components/IncidentSignals.svelte';
+import OfficialNotices from '../components/OfficialNotices.svelte';
 import SourceStatus from '../components/SourceStatus.svelte';
 import { api } from '../lib/api';
 import { ageText } from '../lib/format';
+import { isOpen } from '../lib/signals';
 
 const date = Astro.url.searchParams.get('date') || '';
 const time = Astro.url.searchParams.get('time') || '';
 // Cada fuente puede fallar por separado: su parte de la página se oculta.
-const [ranking, status, nucleos, anom, inc] = await Promise.all([
+const [ranking, status, nucleos, anom, inc, avisos] = await Promise.all([
   api.ranking(6).catch(() => []),
   api.status().catch(() => null),
   api.nucleos().catch(() => []),
   api.anomalias().catch(() => null),
   api.incidencias({ periodo: 'vigentes' }).catch(() => null),
+  api.avisosOficiales({ estado: 'abiertos', horas: '24' }).catch(() => null),
 ]);
 const rtC = status?.feeds?.rt_trip_updates_cer?.ts;
 const rtL = status?.feeds?.rt_trip_updates_ld?.ts;
 
-const signals: any[] = anom?.items || [];
+// Episodios abiertos (observación/confirmada); los resueltos no se muestran en portada.
+const signals: any[] = (anom?.items || []).filter(isOpen);
 const sigBy = new Map<string, number>();
 for (const s of signals) {
   const k = s.nucleo?.slug;
   if (k) sigBy.set(k, (sigBy.get(k) || 0) + 1);
 }
+// Avisos oficiales abiertos (todos los núcleos); degradan a los de la respuesta de incidencias.
+const notices: any[] = (avisos?.items ?? inc?.official_notices ?? [])
+  .filter((t: any) => t.status !== 'normalizada');
 const slugOf = (n: any): string => n.slug || (n.url || '').split('/').filter(Boolean).pop() || '';
 const staleFeed = !!inc?.source?.content_stale;
-const showAhora = !!anom || staleFeed;
+const showAhora = !!anom || !!avisos || staleFeed;
 const rtAge = anom?.rt_age_sec != null
   ? ageText(Math.floor(Date.now() / 1000) - anom.rt_age_sec) : null;
 ---
@@ -51,7 +58,11 @@ const rtAge = anom?.rt_age_sec != null
     <section class="card" aria-labelledby="ahora-h">
       <h2 id="ahora-h">Ahora en tu red</h2>
       {staleFeed && <SourceStatus source={inc.source} count={inc.total} compact />}
-      {anom && signals.length > 0 && <IncidentSignals items={signals} compact limit={4} />}
+      <h3 class="sub">Avisos oficiales (canales de Renfe)</h3>
+      <OfficialNotices items={notices} compact limit={3}
+        empty="Sin avisos oficiales abiertos en las últimas 24 h" />
+      <h3 class="sub">Posibles incidencias (inferidas)</h3>
+      {signals.length > 0 && <IncidentSignals items={signals} compact limit={4} />}
       {anom && signals.length === 0 && (
         <>
           <p class="calm">Sin retrasos generalizados detectados ahora.</p>
@@ -60,6 +71,7 @@ const rtAge = anom?.rt_age_sec != null
             {rtAge ? ` · datos RT ${rtAge}` : ''}.</p>
         </>
       )}
+      {!anom && <p class="muted small">Retrasos en tiempo real no disponibles ahora.</p>}
     </section>
   )}
 
@@ -106,6 +118,7 @@ const rtAge = anom?.rt_age_sec != null
   h2 { display: flex; flex-wrap: wrap; gap: .2rem .6rem; align-items: baseline; }
   h2 a { font-size: .8rem; font-weight: 400; }
   .calm { font-weight: 600; color: var(--ok); margin: 0 0 .2rem; }
+  h3.sub { font-size: .9rem; margin: .7rem 0 .3rem; color: var(--muted); font-weight: 650; }
   .nucs { display: flex; flex-wrap: wrap; gap: .4rem; }
   .nuc { border: 1px solid var(--border); border-radius: 999px; padding: .3rem .75rem;
          font-size: .85rem; color: var(--text); min-height: 36px; display: inline-flex;

@@ -38,3 +38,16 @@ POLL_PUSH = int(os.environ.get("POLL_PUSH", "60"))
 VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com")
+
+# Avisos oficiales (WhatsApp Channels de Renfe, pegados a mano o vía WAHA)
+# WAHA desactivado si WAHA_URL está vacío.
+WAHA_URL = os.environ.get("WAHA_URL", "").strip().rstrip("/")
+WAHA_API_KEY = os.environ.get("WAHA_API_KEY", "")
+WAHA_SESSION = os.environ.get("WAHA_SESSION", "default")
+# lista "invite_code:channel_slug:nucleo_code" separada por comas
+WAHA_CHANNELS = os.environ.get("WAHA_CHANNELS", "")
+POLL_WAHA = int(os.environ.get("POLL_WAHA", "120"))
+# hilo abierto sin novedades durante este tiempo -> sin_actualizar (no resuelto)
+NOTICE_STALE_SEC = int(os.environ.get("NOTICE_STALE_SEC", str(6 * 3600)))
+# un aviso se une a un hilo si el último del hilo tiene menos de esta antigüedad
+NOTICE_THREAD_SEC = int(os.environ.get("NOTICE_THREAD_SEC", str(12 * 3600)))

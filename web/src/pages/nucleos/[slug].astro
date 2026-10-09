@@ -3,23 +3,27 @@ import Base from '../../layouts/Base.astro';
 import IncidentCard from '../../components/IncidentCard.svelte';
 import SourceStatus from '../../components/SourceStatus.svelte';
 import IncidentSignals from '../../components/IncidentSignals.svelte';
+import OfficialNotices from '../../components/OfficialNotices.svelte';
 import { api } from '../../lib/api';
 import { fmtDelay } from '../../lib/format';
+import { isOpen } from '../../lib/signals';
 
 const slug = Astro.params.slug || '';
-let n: any = null, agg: any = null, inc: any = null, anom: any = null;
+let n: any = null, agg: any = null, inc: any = null, anom: any = null, avisos: any = null;
 try {
   n = await api.nucleo(slug);
 } catch (e: any) {
   if (e?.status === 404) return new Response(null, { status: 404, statusText: 'Not found' });
   throw e;
 }
-[agg, inc, anom] = await Promise.all([
+[agg, inc, anom, avisos] = await Promise.all([
   api.delaysByLine({ nucleo: slug }).catch(() => null),
   api.incidencias({ nucleo: slug }).catch(() => null),
   api.anomalias({ nucleo: slug }).catch(() => null),
+  api.avisosOficiales({ nucleo: slug, estado: 'abiertos', horas: '24' }).catch(() => null),
 ]);
-const signals: any[] = anom?.items || [];
+const signals: any[] = (anom?.items || []).filter(isOpen);
+const notices: any[] = avisos?.items || [];
 const live = new Map((agg?.items || []).map((i: any) => [i.line.slug, i]));
 const lineAlerts = (inc?.items || []).filter((a: any) => a.relevance === 'line');
 ---
@@ -30,13 +34,16 @@ const lineAlerts = (inc?.items || []).filter((a: any) => a.relevance === 'line')
   <p class="muted">{n.operator} · {n.lines.length} líneas · {n.stations} estaciones con servicio en el horario vigente
     · <a href={`/mapa/${slug}`}>Ver mapa</a></p>
 
-  {signals.length > 0 && (
-    <section class="card" aria-labelledby="sig-h">
-      <h2 id="sig-h">Posibles incidencias ahora</h2>
-      <IncidentSignals items={signals} />
-      <p class="muted small">Inferidas de los retrasos informados en tiempo real; no son avisos oficiales de Renfe.</p>
-    </section>
-  )}
+  <section class="card" aria-labelledby="of-h">
+    <h2 id="of-h">Avisos oficiales (canales de Renfe)</h2>
+    <OfficialNotices items={notices} empty="Sin avisos oficiales abiertos en las últimas 24 h" />
+  </section>
+
+  <section class="card" aria-labelledby="sig-h">
+    <h2 id="sig-h">Posibles incidencias inferidas</h2>
+    <IncidentSignals items={signals} compact={false} empty="Sin retrasos generalizados detectados ahora." />
+    <p class="muted small">Inferidas de los retrasos informados en tiempo real; no son avisos oficiales de Renfe.</p>
+  </section>
 
   <section class="card">
     <h2>Líneas</h2>

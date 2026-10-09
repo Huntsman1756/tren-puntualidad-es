@@ -4,8 +4,10 @@ import IncidentCard from '../../../components/IncidentCard.svelte';
 import SourceStatus from '../../../components/SourceStatus.svelte';
 import LineBadge from '../../../components/LineBadge.svelte';
 import IncidentSignals from '../../../components/IncidentSignals.svelte';
+import OfficialNotices from '../../../components/OfficialNotices.svelte';
 import { api } from '../../../lib/api';
 import { fmtDelay, fmtTime } from '../../../lib/format';
+import { isOpen } from '../../../lib/signals';
 
 const { nucleo, linea } = Astro.params as { nucleo: string; linea: string };
 const date = Astro.url.searchParams.get('date') || '';
@@ -17,11 +19,13 @@ try {
   if (e?.status === 404) return new Response(null, { status: 404, statusText: 'Not found' });
   throw e;
 }
-const [inc, anom] = await Promise.all([
+const [inc, anom, avisos] = await Promise.all([
   api.incidencias({ nucleo, linea }).catch(() => null),
   api.anomalias({ nucleo, linea }).catch(() => null),
+  api.avisosOficiales({ nucleo, linea, estado: 'abiertos', horas: '24' }).catch(() => null),
 ]);
-const signals: any[] = anom?.items || [];
+const signals: any[] = (anom?.items || []).filter(isOpen);
+const notices: any[] = avisos?.items || [];
 const lineAlerts = (inc?.items || []).filter((a: any) => a.relevance === 'line');
 const stAlerts = (inc?.items || []).filter((a: any) => a.relevance !== 'line');
 const dq = new URLSearchParams();
@@ -54,7 +58,12 @@ const fam = L.family;
 
   <section class="card">
     <h2>Incidencias</h2>
-    {signals.length > 0 && <div class="sig-top"><IncidentSignals items={signals} /></div>}
+    <h3>Avisos oficiales (canales de Renfe)</h3>
+    <OfficialNotices items={notices} empty="Sin avisos oficiales abiertos en las últimas 24 h" />
+    <h3>Posibles incidencias inferidas</h3>
+    {signals.length > 0
+      ? <div class="sig-top"><IncidentSignals items={signals} /></div>
+      : <p class="muted small">Sin retrasos generalizados detectados ahora en esta línea.</p>}
     {inc && <SourceStatus source={inc.source} count={inc.total} />}
     {lineAlerts.map((a: any) => <IncidentCard a={a} context="line" />)}
     {stAlerts.length > 0 && (

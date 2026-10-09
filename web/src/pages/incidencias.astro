@@ -3,7 +3,9 @@ import Base from '../layouts/Base.astro';
 import IncidentCard from '../components/IncidentCard.svelte';
 import SourceStatus from '../components/SourceStatus.svelte';
 import IncidentSignals from '../components/IncidentSignals.svelte';
+import OfficialNotices from '../components/OfficialNotices.svelte';
 import { api } from '../lib/api';
+import { isOpen } from '../lib/signals';
 
 const sp = Astro.url.searchParams;
 const f = {
@@ -29,10 +31,11 @@ try {
       periodo: f.periodo,
     }),
     api.nucleos().catch(() => []),
-    // Señales inferidas: si fallan, la sección simplemente no aparece.
-    api.anomalias({ nucleo: f.nucleo || undefined, linea: lineaFiltro }).catch(() => null),
+    // Señales inferidas: si fallan, la sección muestra su estado vacío.
+    // Incluye resueltos; se filtran abajo a los de las últimas 6 h.
+    api.anomalias({ nucleo: f.nucleo || undefined, linea: lineaFiltro, incluir_resueltas: '1' })
+      .catch(() => null),
   ]);
-  anom = anom?.items?.length ? anom : null;
   if (f.estacion) {
     const [fe, st] = f.estacion.split(',')[0].split(':');
     stationName = await api.station(fe, st).then((s: any) => s.name).catch(() => st);
@@ -41,6 +44,12 @@ try {
   error = e?.status === 404 ? 'Núcleo o línea desconocidos.' : 'No se han podido cargar las incidencias.';
 }
 const nuc = nucleos.find((n: any) => n.slug === f.nucleo);
+const nowS = Math.floor(Date.now() / 1000);
+const SIX_H = 6 * 3600;
+// Abiertos + resueltos de las últimas 6 h.
+const sigItems: any[] = (anom?.items || []).filter((it: any) =>
+  isOpen(it) || (it.resolved_at != null && nowS - it.resolved_at <= SIX_H));
+const notices: any[] = data?.official_notices || [];
 const CATS: Record<string, string> = data?.categories || {
   accesibilidad: 'Accesibilidad', obras: 'Obras programadas',
   interrumpido: 'Servicio interrumpido', alternativo: 'Servicio alternativo',
@@ -102,17 +111,17 @@ const scopeTitle = f.estacion ? `en ${stationName}`
       <a href="/incidencias" class="reset">Quitar filtros</a>}
   </form>
 
-  {anom && !f.estacion && (
-    <section class="card" aria-labelledby="inf-h">
-      <h2 id="inf-h">Posibles incidencias inferidas</h2>
-      <p class="muted note">Calculadas a partir de los retrasos informados en tiempo real.
-        No son avisos oficiales de Renfe.</p>
-      <IncidentSignals items={anom.items} />
-    </section>
-  )}
+  <section class="card" aria-labelledby="of-h" id="avisos-oficiales">
+    <h2 id="of-h">Avisos oficiales (canales de Renfe)</h2>
+    <p class="muted note">Mensajes publicados por Renfe en sus canales, con el texto original.
+      No se editan ni se resumen.</p>
+    <OfficialNotices items={notices} empty="Sin avisos oficiales abiertos en las últimas 24 h" />
+  </section>
 
-  {error && <div class="card alert" role="alert">{error}</div>}
-  {data && (
+  <section class="card" aria-labelledby="gtfs-h">
+    <h2 id="gtfs-h">Avisos del feed oficial GTFS-RT</h2>
+    {error && <div class="alert" role="alert">{error}</div>}
+    {data && (
     <>
       <SourceStatus source={data.source} count={data.total} />
       {data.total > 0 && (
@@ -131,6 +140,16 @@ const scopeTitle = f.estacion ? `en ${stationName}`
       )}
       {data.items.map((a: any) => <IncidentCard a={a} />)}
     </>
+    )}
+  </section>
+
+  {!f.estacion && (
+    <section class="card" aria-labelledby="inf-h">
+      <h2 id="inf-h">Posibles incidencias inferidas</h2>
+      <p class="muted note">Calculadas a partir de los retrasos informados en tiempo real.
+        No son avisos oficiales de Renfe. Se muestran los abiertos y los resueltos de las últimas 6 h.</p>
+      <IncidentSignals items={sigItems} empty="Sin retrasos generalizados detectados ahora." />
+    </section>
   )}
   <p class="muted small">Fuente: Renfe Operadora, GTFS-RT Service Alerts
     (<a href="https://data.renfe.com">data.renfe.com</a>, CC-BY 4.0). Auditoría técnica:

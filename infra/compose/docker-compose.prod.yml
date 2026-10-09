@@ -110,9 +110,34 @@ services:
       PGDATABASE: ${POSTGRES_DB:-renfe}
     command: ["sh", "/backup_loop.sh"]
 
+  # EXPERIMENTAL: avisos oficiales de WhatsApp Channels vía WAHA (no oficial).
+  # Solo se levanta con --profile waha (deploy.sh no lo arranca). Usar SIEMPRE
+  # una cuenta de WhatsApp de pruebas, nunca la personal. Ver docs/whatsapp-waha.md.
+  # Sin puertos publicados ni labels de Traefik: el collector llega por http://waha:3000.
+  waha:
+    profiles: ["waha"]
+    # TODO: fijar un tag probado tras el piloto (no usar latest en producción).
+    image: devlikeapro/waha:latest
+    restart: unless-stopped
+    environment:
+      # Motor por defecto GOWS; si falla la lectura de canales, probar WEBJS.
+      WHATSAPP_DEFAULT_ENGINE: GOWS
+      WAHA_API_KEY: ${WAHA_API_KEY:-}
+      WAHA_DASHBOARD_ENABLED: "false"
+      WHATSAPP_RESTART_ALL_SESSIONS: "true"
+    volumes:
+      - waha_sessions:/app/.sessions
+    networks:
+      - default
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
 networks:
   coolify:
     external: true
 
 volumes:
   backups:
+  waha_sessions:

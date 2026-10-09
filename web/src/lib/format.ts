@@ -50,3 +50,19 @@ export function fmtStamp(epoch?: number | null): string {
   const g = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
   return `${g('day')}/${g('month')} ${g('hour')}:${g('minute')}`;
 }
+
+/** "HH:MM" en Europe/Madrid. */
+export function fmtHM(epoch?: number | null): string {
+  if (!epoch) return '—';
+  return new Intl.DateTimeFormat('es-ES', {
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Europe/Madrid',
+  }).format(new Date(epoch * 1000));
+}
+
+/** Duración en segundos → "42 min" o "2 h 05 min". */
+export function fmtDurSec(sec?: number | null): string {
+  if (sec == null) return '';
+  const m = Math.max(0, Math.round(sec / 60));
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+}

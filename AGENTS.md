@@ -41,3 +41,14 @@
 - `docker compose exec api python -c ...` o `curl localhost:8000/api/meta/status` para frescura.
 - Board de prueba: `curl "localhost:8000/api/stations/cer/17000/board"` (Atocha varía; buscar con /api/stations/search).
 - Build web: `cd web && npm run build`.
+
+## Avisos oficiales (WhatsApp/manual)
+
+- Alta manual: `ADMIN_TOKEN=... scripts/aviso.sh [--canal cercanias-madrid] [--nucleo madrid] < mensaje.txt`
+  (POST `/api/v1/admin/avisos`; `BASE` por defecto `https://trenes.h1756.es`).
+- Ingesta WAHA (experimental): variables `WAHA_URL`, `WAHA_API_KEY`, `WAHA_SESSION`,
+  `WAHA_CHANNELS`, `POLL_WAHA` (ver `.env.example`). Desactivada si `WAHA_URL` está vacío.
+- Servicio `waha` en `infra/compose/docker-compose.prod.yml` con `profiles: ["waha"]`:
+  NO lo arrancan los deploys; solo `--profile waha` explícito.
+- Usar SIEMPRE una cuenta de WhatsApp de pruebas, nunca la personal (integración no oficial,
+  riesgo de restricción de la cuenta). Guía completa: `docs/whatsapp-waha.md`.

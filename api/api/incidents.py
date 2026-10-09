@@ -32,6 +32,7 @@ from api.common import (
     nucleo_public,
 )
 from api.db import engine
+from api.notices import threads_for_filters
 
 router = APIRouter(prefix="/api/v1")
 
@@ -360,14 +361,19 @@ def source_health(feed: str, now: int | None = None) -> dict:
                 "message": "Renfe no publica avisos GTFS-RT para esta red: "
                            "cobertura de incidencias desconocida."}
     keys = [f"alerts_fetch_ok_{feed}", f"alerts_fetch_err_{feed}",
-            f"rt_alerts_{feed}", f"alerts_count_{feed}"]
+            f"rt_alerts_{feed}", f"alerts_count_{feed}",
+            f"alerts_content_changed_{feed}", f"alerts_content_hash_{feed}"]
     with engine.connect() as c:
         m = dict(c.execute(text("SELECT key, value FROM meta WHERE key = ANY(:k)"),
                            {"k": keys}).all())
     ok = _int(m.get(keys[0]))
     err = _int(m.get(keys[1]))
-    feed_ts = _int(m.get(keys[2]))
+    feed_ts = _int(m.get(keys[2]))          # timestamp del header (no sirve de frescura)
     count = _int(m.get(keys[3]))
+    changed = _int(m.get(keys[4]))          # último cambio REAL de contenido (hash)
+    chash = m.get(keys[5]) or None
+    chash = chash[:12] if chash else None
+    content_ts = changed if changed is not None else feed_ts
     if ok is None:
         status = "unknown"
         msg = "Sin registro de descargas de la fuente: cobertura desconocida."
@@ -385,18 +391,22 @@ def source_health(feed: str, now: int | None = None) -> dict:
         msg = "Sin descargas recientes de la fuente: datos posiblemente antiguos."
     # frescura del CONTENIDO (header del feed), distinta de la última descarga:
     # Renfe puede dejar de actualizar su feed aunque la descarga responda
-    content_age = now - feed_ts if feed_ts is not None else None
+    content_age = now - content_ts if content_ts is not None else None
     content_stale = (status == "ok" and content_age is not None
                      and content_age > CONTENT_STALE_SEC)
     if content_stale:
-        when = datetime.fromtimestamp(feed_ts, TZ).strftime("%d/%m %H:%M")
+        when = datetime.fromtimestamp(content_ts, TZ).strftime("%d/%m %H:%M")
         msg = (f"Renfe no actualiza su feed oficial de avisos desde hace "
                f"{_human_age(content_age)} ({when}). Las incidencias de última "
                "hora que Renfe publica en sus canales de WhatsApp/X no tienen "
                "datos abiertos y pueden no aparecer aquí.")
     return {"feed": feed, "status": status, "message": msg,
             "last_ok": ok, "last_error": err, "feed_ts": feed_ts,
-            "content_ts": feed_ts, "content_age_sec": content_age,
+            "last_fetch_ok": ok, "last_fetch_error": err,
+            "content_changed_at": content_ts, "header_ts": feed_ts,
+            "content_hash": chash,
+            # alias de compatibilidad: ahora = content_changed_at
+            "content_ts": content_ts, "content_age_sec": content_age,
             "content_stale": content_stale,
             "official_channels": OFFICIAL_CHANNELS,
             "published": count, "feed_url": FEED_URLS[feed]}
@@ -615,8 +625,12 @@ def incidencias(feed: str = Query("cer", pattern="^(cer|ld)$"),
     """Avisos oficiales normalizados. `periodo`: actuales (publicados,
     vigentes o futuros), vigentes, proximas, recientes (retirados o
     caducados en los últimos 7 días) o todas."""
-    return query(feed, nucleo, linea, estacion, categoria, periodo,
-                 origen, destino)
+    out = query(feed, nucleo, linea, estacion, categoria, periodo,
+                origen, destino)
+    # avisos oficiales (WhatsApp/manual) abiertos: solo Cercanías
+    out["official_notices"] = (threads_for_filters(nucleo, linea, estacion)
+                               if feed == "cer" else [])
+    return out
 
 
 @router.get("/incidencias/audit")

@@ -113,6 +113,16 @@ for (const mob of [false, true]) {
     expect(/Madrid/.test(t), 'el distintivo no indica núcleo: ' + t);
   });
 
+  await run('incidencias: tres secciones en orden', mob, async (pg) => {
+    await pg.goto(BASE + '/incidencias', { waitUntil: 'domcontentloaded' });
+    await pg.waitForSelector('h2', { timeout: 10000 });
+    const heads = await pg.locator('h2').allTextContents();
+    const want = ['Avisos oficiales (canales de Renfe)', 'Avisos del feed oficial GTFS-RT', 'Posibles incidencias inferidas'];
+    const idx = want.map((w) => heads.findIndex((h) => h.includes(w)));
+    expect(idx.every((i) => i >= 0), `faltan encabezados: ${heads.join(' | ')}`);
+    expect(idx[0] < idx[1] && idx[1] < idx[2], `orden incorrecto: ${idx.join(',')}`);
+  });
+
   await run('incidencias: estado de fuente y filtro por núcleo', mob, async (pg) => {
     await pg.goto(BASE + '/incidencias', { waitUntil: 'domcontentloaded' });
     await pg.waitForSelector('.src .badge', { timeout: 10000 });

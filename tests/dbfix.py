@@ -82,7 +82,7 @@ TABLES = ["stops", "routes", "trips", "stop_times", "service_days",
           "trip_flags", "trip_span", "line_route", "station_nucleo",
           "alerts", "alerts_seen", "rt_trip", "rt_stop_update", "rt_fleet",
           "rt_vehicle", "shapes", "shape_quality", "push_rules", "push_devices", "push_subs", "meta",
-          "capture_health"]
+          "capture_health", "anomaly_episode", "anomaly_sample", "official_notice"]
 
 
 def service_days(days_all=range(-1, 8), d2=(2,)):
@@ -129,6 +129,9 @@ def reset_api_caches():
     if hasattr(m._coverage_days, "c"):
         del m._coverage_days.c
     m._stations_cache["ts"] = 0
+    # TestClient se presenta como una única IP ("testclient"): sin reiniciar
+    # el contador, la suite completa supera RATE_LIMIT_PER_MIN y da 429.
+    m._rl.clear()
 
 
 @pytest.fixture(scope="session")

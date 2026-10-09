@@ -63,6 +63,9 @@ export const api = {
   /** Señales INFERIDAS de retrasos RT (no son avisos oficiales). */
   anomalias: (opts: Record<string, string | undefined> = {}) =>
     get(`/api/v1/anomalias${q(opts)}`),
+  /** Hilos de avisos OFICIALES (canales de Renfe), con sus mensajes originales. */
+  avisosOficiales: (opts: Record<string, string | undefined> = {}) =>
+    get(`/api/v1/avisos-oficiales${q(opts)}`),
   incidencia: (feed: string, id: string) =>
     get(`/api/v1/incidencias/${feed}/${encodeURIComponent(id)}`),
   nucleos: () => get('/api/v1/nucleos'),

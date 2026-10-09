@@ -5,6 +5,9 @@
   export let source = null;
   export let count = 0;
   export let compact = false;  // portada: solo una línea si el feed está sin actualizar
+  // Dos marcas de tiempo separadas: última descarga correcta vs. último cambio de contenido.
+  $: lastOk = source?.last_fetch_ok ?? source?.last_ok ?? null;
+  $: changed = source?.content_changed_at ?? source?.content_ts ?? null;
   const CLS = { ok: 'ok', stale: 'warn', down: 'bad', unknown: 'nodata', not_available: 'nodata' };
   const LBL = { ok: 'Fuente operativa', stale: 'Fuente sin actualizar', down: 'Fuente caída',
                 unknown: 'Cobertura desconocida', not_available: 'Sin fuente de avisos' };
@@ -13,7 +16,7 @@
 {#if source && compact}
   {#if source.content_stale}
     <p class="stale-line" role="status">⚠ El feed oficial de avisos de Renfe no se actualiza desde
-      {fmtStamp(source.content_ts)} · <a href="/incidencias">ver detalles</a></p>
+      {fmtStamp(changed)} · <a href="/incidencias">ver detalles</a></p>
   {/if}
 {:else if source}
   <p class="src" role="status">
@@ -25,7 +28,12 @@
     {:else if source.status !== 'ok'}
       <span>{source.message}</span>
     {/if}
-    {#if source.last_ok}<span class="muted">· última descarga {ageText(source.last_ok)}</span>{/if}
+  </p>
+  <p class="stamps muted">
+    <span>Última descarga correcta: {ageText(lastOk)}</span>
+    {#if source.last_fetch_error}<span class="sep">·</span><span class="err" title={source.last_fetch_error}>último intento fallido</span>{/if}
+    <span class="sep">·</span>
+    <span>Último cambio de contenido: {changed ? fmtStamp(changed) : 'sin datos'}{#if source.content_hash} <span class="hash" title="El cambio se detecta comparando la huella (hash) del contenido">· comprobado por huella</span>{/if}</span>
   </p>
   {#if source.content_stale}
     <div class="stale" role="status">
@@ -38,7 +46,7 @@
           {/each}
         </p>
       {/if}
-      <p class="muted stamp">Última actualización del feed oficial: {fmtStamp(source.content_ts)} (Europe/Madrid)</p>
+      <p class="muted stamp">Último cambio de contenido: {fmtStamp(changed)} (Europe/Madrid)</p>
     </div>
   {/if}
 {/if}
@@ -53,4 +61,8 @@
   .chan a { font-weight: 600; }
   .stamp { font-size: .8rem; }
   .stale-line { margin: .3rem 0; font-size: .88rem; color: var(--warn); font-weight: 600; }
+  .stamps { display: flex; flex-wrap: wrap; gap: .1rem .3rem; align-items: center; font-size: .8rem; margin: .1rem 0 .3rem; }
+  .sep { margin: 0 .1rem; }
+  .err { color: var(--bad); font-weight: 600; }
+  .hash { font-style: italic; }
 </style>

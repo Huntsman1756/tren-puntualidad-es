@@ -236,3 +236,79 @@ def test_source_health_flags_stale_official_content(scenario):
     s = source_health("cer", now)
     assert s["content_stale"] is False and s["content_age_sec"] == 3600
     assert "WhatsApp" not in s["message"]
+
+
+@pytest.mark.integration
+def test_alerts_content_hash_ignores_header_timestamp(scenario):
+    from collector.realtime import poll_alerts
+
+    def feed(ts, text_):
+        return {"header": {"timestamp": str(ts)}, "entity": [
+            {"id": "A1", "alert": {"descriptionText": {"translation": [
+                {"text": text_, "language": "es"}]}}}]}
+
+    def changed_at():
+        with scenario.connect() as c:
+            return c.execute(text("SELECT value FROM meta WHERE key="
+                                  "'alerts_content_changed_cer'")).scalar()
+
+    poll_alerts("cer", data=feed(1000, "Obras"), now=1000)
+    assert changed_at() == "1000"
+    poll_alerts("cer", data=feed(2, "Obras"), now=2000)   # solo cambia la cabecera
+    assert changed_at() == "1000"
+    poll_alerts("cer", data=feed(3, "Obras y retrasos"), now=3000)
+    assert changed_at() == "3000"
+
+
+@pytest.mark.integration
+def test_content_changed_at_drives_staleness(scenario):
+    """El último cambio real de contenido (hash) manda; el header no basta."""
+    from api.incidents import source_health
+    now = int(time.time())
+    _load(scenario, [], ok_ts=now - 60)
+    with scenario.begin() as c:   # header reciente, pero el contenido no cambia desde hace 30 h
+        for k, v in (("rt_alerts_cer", str(now - 60)),
+                     ("alerts_content_changed_cer", str(now - 30 * 3600)),
+                     ("alerts_content_hash_cer", "abcdef0123456789ff")):
+            c.execute(text("INSERT INTO meta VALUES (:k, :v) ON CONFLICT (key)"
+                           " DO UPDATE SET value=EXCLUDED.value"), {"k": k, "v": v})
+    s = source_health("cer", now)
+    assert s["status"] == "ok" and s["content_stale"] is True
+    assert s["content_changed_at"] == now - 30 * 3600 and s["header_ts"] == now - 60
+    assert s["content_hash"] == "abcdef012345"
+    assert s["content_ts"] == s["content_changed_at"]          # alias de compatibilidad
+    assert s["content_age_sec"] == 30 * 3600
+    assert s["last_fetch_ok"] == now - 60 and s["last_fetch_error"] is None
+    assert "desde hace 30 horas" in s["message"]
+    with scenario.begin() as c:   # contenido cambiado hace 1 h, header viejo: no es obsoleto
+        c.execute(text("UPDATE meta SET value=:v WHERE key='alerts_content_changed_cer'"),
+                  {"v": str(now - 3600)})
+        c.execute(text("UPDATE meta SET value=:v WHERE key='rt_alerts_cer'"),
+                  {"v": str(now - 30 * 3600)})
+    s = source_health("cer", now)
+    assert s["content_stale"] is False and s["content_age_sec"] == 3600
+    assert s["header_ts"] == now - 30 * 3600
+
+
+@pytest.mark.integration
+def test_alerts_first_hash_seeds_changed_at_from_feed_header(scenario):
+    from collector.realtime import poll_alerts
+    base = 1_800_000_000
+
+    def feed(ts, text_):
+        return {"header": {"timestamp": str(ts)}, "entity": [
+            {"id": "A1", "alert": {"descriptionText": {"translation": [
+                {"text": text_, "language": "es"}]}}}]}
+
+    def changed_at():
+        with scenario.connect() as c:
+            return c.execute(text("SELECT value FROM meta WHERE key="
+                                  "'alerts_content_changed_cer'")).scalar()
+
+    old = base - 48 * 3600   # feed congelado desde hace 48 h
+    poll_alerts("cer", data=feed(old, "Obras"), now=base)
+    assert changed_at() == str(old)                       # sembrado, no 'ahora'
+    poll_alerts("cer", data=feed(old, "Obras"), now=base + 60)
+    assert changed_at() == str(old)                       # mismo contenido
+    poll_alerts("cer", data=feed(old, "Obras y retrasos"), now=base + 120)
+    assert changed_at() == str(base + 120)                # cambio real

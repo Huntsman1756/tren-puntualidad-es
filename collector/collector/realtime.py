@@ -3,6 +3,7 @@
 El parsing está separado de la escritura para poder testearlo offline.
 """
 import contextlib
+import hashlib
 import json
 import logging
 import time
@@ -12,7 +13,7 @@ import httpx
 from sqlalchemy import text
 
 from collector.config import FLOTA_URL, RT_ALERTS, RT_TRIP_UPDATES, RT_VEHICLE_POSITIONS
-from collector.db import engine, set_meta
+from collector.db import engine, get_meta, set_meta
 from collector.gtfsutil import TZINFO, extract_platform
 
 log = logging.getLogger("collector.rt")
@@ -416,7 +417,24 @@ def poll_alerts(feed: str, data: dict | None = None, now: int | None = None):
                 set_meta(conn, f"alerts_fetch_errmsg_{feed}", str(e)[:200])
             raise
     feed_ts, rows = parse_alerts(data, feed)
+    # Hash del CONTENIDO (entidades ordenadas por id, sin la cabecera con
+    # timestamp): solo cambia cuando Renfe cambia avisos de verdad.
+    ents = sorted(data.get("entity") or [], key=lambda e: str(e.get("id") or ""))
+    content_hash = hashlib.sha256(
+        json.dumps(ents, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
     with engine.begin() as conn:
+        prev = get_meta(conn, f"alerts_content_hash_{feed}")
+        if prev != content_hash:
+            set_meta(conn, f"alerts_content_hash_{feed}", content_hash)
+            if prev is None:
+                # primera vez: no es un cambio real. Se siembra con la hora del
+                # feed (si es plausible) para no parecer recién cambiado.
+                if get_meta(conn, f"alerts_content_changed_{feed}") is None:
+                    seed = feed_ts if feed_ts <= now else now
+                    set_meta(conn, f"alerts_content_changed_{feed}", seed)
+            else:
+                set_meta(conn, f"alerts_content_changed_{feed}", now)
         conn.execute(text("DELETE FROM alerts WHERE feed=:f"), {"f": feed})
         if rows:
             conn.execute(text("""

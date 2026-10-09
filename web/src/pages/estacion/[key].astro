@@ -6,6 +6,7 @@ import AlertButton from '../../components/AlertButton.svelte';
 import LineBadge from '../../components/LineBadge.svelte';
 import IncidentCard from '../../components/IncidentCard.svelte';
 import SourceStatus from '../../components/SourceStatus.svelte';
+import OfficialNotices from '../../components/OfficialNotices.svelte';
 import DateBar from '../../components/DateBar.astro';
 import { api, coverageMax, feedsOf } from '../../lib/api';
 import { FEED_NAME } from '../../lib/format';
@@ -42,6 +43,11 @@ const maxDate = coverageMax(coverage, feedsOf(key));
 const here = (inc?.items || []).filter((a: any) =>
   ['station', 'line', 'line_mentions_station'].includes(a.relevance));
 const elsewhere = (inc?.items || []).filter((a: any) => a.relevance === 'line_other_station');
+// Avisos oficiales (hilos) cuyas estaciones incluyen esta estación.
+const keySet = new Set(pairs.map(([f, s]) => `${f}:${s}`));
+const stopSet = new Set(pairs.map(([, s]) => s));
+const notices = (inc?.official_notices || []).filter((t: any) =>
+  (t.stations || []).some((s: any) => keySet.has(s.key) || (s.stop_id != null && stopSet.has(String(s.stop_id)))));
 ---
 <Base title={`${name} — horarios, líneas y avisos | Trenes a tiempo`}
     description={`Próximas salidas y llegadas en ${name}: horarios programados, estimaciones en tiempo real, retrasos, líneas y avisos oficiales de Renfe.`}
@@ -66,6 +72,12 @@ const elsewhere = (inc?.items || []).filter((a: any) => a.relevance === 'line_ot
   )}
   <AlertButton client:load cfg={{ type: 'station', station_key: key }} label={name} />
 
+  {notices.length > 0 && (
+    <section class="card" aria-labelledby="st-of-h">
+      <h2 id="st-of-h">Avisos oficiales en esta estación</h2>
+      <OfficialNotices items={notices} />
+    </section>
+  )}
   {here.map((a: any) => <IncidentCard a={a} context="station" />)}
   {elsewhere.length > 0 && (
     <details class="others"><summary>{elsewhere.length} aviso{elsewhere.length === 1 ? '' : 's'} de estas líneas en otras estaciones</summary>
