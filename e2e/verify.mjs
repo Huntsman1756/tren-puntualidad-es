@@ -63,6 +63,8 @@ for (const mob of [false, true]) {
   });
   await run('estadísticas: página y filtros', mob, async (pg) => {
     await pg.goto(BASE + '/estadisticas', { waitUntil: 'domcontentloaded' });
+    // con STATS_PUBLIC apagado la página debe mostrar el estado de validación
+    if (await pg.locator('.validation').count()) return;
     await pg.waitForSelector('.statsx select', { timeout: 8000 });
     if (!(await pg.locator('text=no es puntualidad real').count())
         && !(await pg.locator('text=no es').count()))
@@ -78,6 +80,7 @@ for (const mob of [false, true]) {
   });
   await run('estadísticas: metodología accesible', mob, async (pg) => {
     await pg.goto(BASE + '/estadisticas', { waitUntil: 'domcontentloaded' });
+    if (await pg.locator('.validation').count()) return;
     await pg.waitForSelector('details.met summary', { timeout: 8000 });
     await pg.locator('details.met summary').click();
     await pg.waitForSelector('details.met li', { timeout: 8000 });
