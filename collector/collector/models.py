@@ -290,6 +290,82 @@ class RouteCore(Base):
 Index("ix_route_core_nucleo", RouteCore.feed, RouteCore.nucleo)
 
 
+class AnomalyEpisode(Base):
+    """Episodio de posible incidencia INFERIDA en una línea (núcleo+familia).
+
+    status: observacion (señal aún no persistente) | confirmada (persiste
+    >= ANOMALY_CONFIRM_SEC) | resuelta (sin señal durante ANOMALY_CLEAR_SEC
+    con datos RT frescos). Nunca se resuelve por falta de datos RT: si el
+    feed no es fresco el episodio queda igual y se marca rt_gap_since."""
+    __tablename__ = "anomaly_episode"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    nucleo_code = Column(String(4), nullable=False)
+    family_slug = Column(String(16), nullable=False)
+    status = Column(String(12), nullable=False)
+    opened_at = Column(BigInteger, nullable=False)
+    confirmed_at = Column(BigInteger)
+    last_signal_at = Column(BigInteger)
+    last_eval_at = Column(BigInteger)
+    resolved_at = Column(BigInteger)
+    rt_gap_since = Column(BigInteger)
+    evaluations = Column(Integer, default=0)
+    signal_evaluations = Column(Integer, default=0)
+    peak_delayed_15 = Column(Integer, default=0)
+    peak_share = Column(Float)
+    peak_max_delay_sec = Column(Integer)
+    last_metrics = Column(JSONB)
+
+
+Index("ix_anomaly_open", AnomalyEpisode.status, AnomalyEpisode.nucleo_code,
+      AnomalyEpisode.family_slug)
+
+
+class AnomalySample(Base):
+    """Métricas por línea en cada evaluación de un episodio (evolución)."""
+    __tablename__ = "anomaly_sample"
+    episode_id = Column(BigInteger, primary_key=True)
+    ts = Column(BigInteger, primary_key=True)
+    monitored = Column(Integer)
+    scheduled_now = Column(Integer)
+    delayed_15 = Column(Integer)
+    delayed_30 = Column(Integer)
+    share = Column(Float)
+    max_delay_sec = Column(Integer)
+    median_delay_sec = Column(Integer)
+    signal = Column(Integer)
+
+
+class OfficialNotice(Base):
+    """Aviso oficial de Renfe publicado fuera del GTFS-RT (canal de WhatsApp
+    o pegado a mano por el administrador). Texto íntegro + interpretación.
+
+    status: activa | en_recuperacion (incidencia subsanada, frecuencias
+    recuperándose) | normalizada (Renfe declara normalidad) | sin_actualizar
+    (sin novedades en NOTICE_STALE_SEC; no se presume resuelta).
+    thread_id agrupa un aviso y sus actualizaciones (misma línea + estación/
+    problema)."""
+    __tablename__ = "official_notice"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    source = Column(String(16), nullable=False)        # whatsapp | manual
+    channel = Column(String(64), nullable=False)       # p. ej. cercanias-madrid
+    external_id = Column(String(128))                  # id del mensaje en origen
+    posted_at = Column(BigInteger, nullable=False)
+    received_at = Column(BigInteger, nullable=False)
+    text = Column(Text, nullable=False)
+    nucleo_code = Column(String(4))
+    lines = Column(JSONB)                              # ["C5", "C4b"]
+    stations = Column(JSONB)                           # [{"name","stop_id"}]
+    kind = Column(String(24))                          # averia_infraestructura | averia_tren | ...
+    status = Column(String(16), nullable=False)
+    is_update = Column(Integer, default=0)
+    thread_id = Column(BigInteger)
+    parse = Column(JSONB)                              # evidencia del parser
+
+
+Index("ux_notice_external", OfficialNotice.source, OfficialNotice.channel,
+      OfficialNotice.external_id, unique=True)
+
+
 class CaptureHealth(Base):
     """Salud de la captura RT por (feed, fuente, día local Europe/Madrid).
 
