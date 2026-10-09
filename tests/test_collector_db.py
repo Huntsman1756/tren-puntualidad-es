@@ -192,13 +192,14 @@ class TestTripUpdatesIngestion:
         assert {str(r["service_date"]) for r in rows} == {str(Y), str(TODAY)}
 
     def test_extreme_delay_still_resolves_when_consistent(self, db):
-        """Retraso de 14 h pero coherente con el horario: la instancia
+        """Retraso extremo (9 h 30, dentro de la ventana plausible de
+        realtime.DELAY_MAX_SEC) pero coherente con el horario: la instancia
         sigue siendo la de hoy (el feed dice time - delay = programado)."""
         from collector.realtime import poll_trip_updates
         load(db, base_zip())
         dep = _mid(TODAY) + 10 * 3600          # T1 dep@S1 10:00
-        ev = dep + 14 * 3600                   # evento estimado 00:00 D+1
-        p = tu_payload(ev, [("T1", [("S1", 14 * 3600, ev)])])
+        ev = dep + 9 * 3600 + 1800             # evento estimado 19:30
+        p = tu_payload(ev, [("T1", [("S1", 9 * 3600 + 1800, ev)])])
         poll_trip_updates("cer", data=p, now=ev)
         rows = obs_rows(db)
         assert len(rows) == 1
@@ -209,10 +210,11 @@ class TestTripUpdatesIngestion:
         programado): svc queda NULL — no se inventa."""
         from collector.realtime import poll_trip_updates
         load(db, base_zip())
-        # T3 dep@S1 12:00. Feed dice time=09:00 con delay=15h ->
-        # programado implícito = 18:00 del día anterior -> fuera de tol.
-        ev = _mid(TODAY) + 9 * 3600
-        p = tu_payload(ev, [("T3", [("S1", 15 * 3600, ev)])])
+        # T3 dep@S1 12:00. Feed dice time=02:00 con delay=9h ->
+        # programado implícito = 17:00 del día anterior: a 5 h del horario
+        # de ayer (12:00) -> fuera de la tolerancia de 4 h.
+        ev = _mid(TODAY) + 2 * 3600
+        p = tu_payload(ev, [("T3", [("S1", 9 * 3600, ev)])])
         poll_trip_updates("cer", data=p, now=ev)
         rows = obs_rows(db)
         assert len(rows) == 1

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.7] — 2026-10-09
+- Histórico: los retrasos implausibles (fuera de −60…+600 min, p. ej. el
+  `retrasoMin = -1438` del visor en trenes que cruzan medianoche) ya no
+  anclan la fecha de servicio ni generan observaciones (se seguían
+  asignando al día siguiente). Defensa adicional: nunca se escribe una
+  observación con fecha de servicio futura.
+- Las observaciones contaminadas ya escritas se movieron a
+  `observations_quarantine` (no se borran).
+
 ## [0.3.6] — 2026-10-09 — consolidación
 
 ### Estadísticas (integradas, aún sin publicar: STATS_PUBLIC)

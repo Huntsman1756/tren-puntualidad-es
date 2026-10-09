@@ -144,6 +144,34 @@ def parse_fleet(data: dict):
     return feed_ts, list(rows.values())
 
 
+# Ventana de retraso plausible (segundos): -60 … +600 min, la misma que la
+# API usa para retrasos de flota. Fuera de ella el dato se guarda crudo pero
+# no ancla la fecha de servicio ni genera observaciones.
+DELAY_MIN_SEC = -3600
+DELAY_MAX_SEC = 36000
+
+
+def _retraso_plausible(sec) -> bool:
+    """None (sin dato) cuenta como plausible: no hay nada que descartar."""
+    return sec is None or DELAY_MIN_SEC <= sec <= DELAY_MAX_SEC
+
+
+def _svc_futura(svc, now: int) -> bool:
+    """True si la fecha de servicio (ISO) es posterior al día local de `now`.
+    Un tren observado ahora no puede pertenecer a un día de servicio futuro;
+    los servicios de madrugada pertenecen al día ANTERIOR, nunca al siguiente."""
+    return svc is not None and svc > datetime.fromtimestamp(now, TZINFO).date().isoformat()
+
+
+def _descartar_futuras(obs: list[dict], now: int, feed: str) -> list[dict]:
+    """Quita observaciones con service_date futura (defensa en profundidad)."""
+    keep = [o for o in obs if not _svc_futura(o["svc"], now)]
+    if len(keep) != len(obs):
+        log.info("%s: %d observaciones con fecha de servicio futura descartadas",
+                 feed, len(obs) - len(keep))
+    return keep
+
+
 def _midnight(day) -> int:
     return int(datetime(day.year, day.month, day.day, tzinfo=TZINFO).timestamp())
 
@@ -304,11 +332,17 @@ def poll_trip_updates(feed: str, data: dict | None = None,
         # Observaciones: solo si cambia delay o time respecto a la última
         # registrada para esta instancia (feed,trip_id,service_date,stop_id).
         if stu_list_all:
+            # Retrasos absurdos (fuera de ventana): ni ancla ni observación.
+            ok_stu = [s for s in stu_list_all if _retraso_plausible(s["delay"])]
+            n_bad = len(stu_list_all) - len(ok_stu)
+            if n_bad:
+                log.info("trip_updates %s: %d retrasos implausibles ignorados",
+                         feed, n_bad)
             # La instancia se resuelve contra GTFS+calendario: el evento
             # programado aproximado es time - delay (time es la predicción
             # del feed). Sin candidato inequívoco -> svc queda NULL.
             items = []
-            for s in stu_list_all:
+            for s in ok_stu:
                 s["src"], s["kind"], s["svc"] = "trip_update", "prediction", None
                 if s["time"]:
                     # arr/dep indistinguibles a nivel de día de servicio
@@ -332,8 +366,9 @@ def poll_trip_updates(feed: str, data: dict | None = None,
                     ORDER BY trip_id, service_date, stop_id, observed_at DESC
                 """), {"f": feed, "cut": now - 86400})
             }
-            obs = [{**s, "o": now, "pts": feed_ts} for s in stu_list_all
+            obs = [{**s, "o": now, "pts": feed_ts} for s in ok_stu
                    if last.get((s["t"], s["svc"], s["s"])) != (s["delay"], s["time"])]
+            obs = _descartar_futuras(obs, now, feed)
             if obs:
                 conn.execute(text("""
                     INSERT INTO observations(feed,trip_id,service_date,stop_id,
@@ -425,7 +460,14 @@ def poll_fleet(data: dict | None = None, now: int | None = None):
                     next_stop_id,next_eta,origin_stop_id,dest_stop_id,lat,lon,platform,next_platform,ts)
                 VALUES(:f,:t,:tn,:line,:dm,:cur,:ns,:eta,:org,:dst,:lat,:lon,:plat,:nplat,:ts)
             """), rows)
-        cands = [r for r in rows if r["dm"] is not None and r["cur"]]
+        # Retrasos absurdos (p. ej. -1438 min por cruce de medianoche): se
+        # guardan en rt_fleet pero no anclan fecha ni generan observaciones.
+        n_bad = sum(1 for r in rows
+                    if r["dm"] is not None and not _retraso_plausible(r["dm"] * 60))
+        if n_bad:
+            log.info("flota: %d retrasos implausibles ignorados", n_bad)
+        cands = [r for r in rows if r["dm"] is not None and r["cur"]
+                 and _retraso_plausible(r["dm"] * 60)]
         if cands:
             items = []
             for r in cands:
@@ -455,6 +497,7 @@ def poll_fleet(data: dict | None = None, now: int | None = None):
                     "pts": feed_ts, "o": now}
                    for r in cands
                    if last.get((r["t"], r["svc"], r["cur"])) != r["dm"] * 60]
+            obs = _descartar_futuras(obs, now, "flota")
             if obs:
                 conn.execute(text("""
                     INSERT INTO observations(feed,trip_id,service_date,stop_id,
