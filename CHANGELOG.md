@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.3.10] — 2026-10-09
+### Planificador con un transbordo
+- `/api/v1/journeys/plan` devuelve `transfers[]` además de directos
+  (`transfers=0` lo desactiva; `max_wait` 10–480 min) y el estado
+  `transfer_only` cuando no hay directo pero sí combinación.
+- Enlaces entre paradas: catálogo curado `transfer_link` (26 dirigidos,
+  dirigidos y con fuente: Atocha Cercanías↔Puerta de Atocha, Málaga,
+  Valencia Nord↔Joaquín Sorolla, Figueres↔Vilafant, Bilbao, Oviedo, Vigo,
+  Barcelona...; nunca inferidos por proximidad) + `transfers.txt` GTFS
+  (21 reglas CER; LD no publica).
+- Caminar puede ser el primer tramo (origen→parada enlazada) o el último
+  (bajar y seguir a pie al destino), solo con enlace verificado.
+- Precedencia GTFS por pareja T1,T2 (trip > route > stop): `type 3`
+  aplicable prohíbe también enlaces manuales; `type 2` eleva el slack;
+  tipos 4/5 = continuidad a bordo / apeo en la misma parada.
+- Riesgo honesto: `ok` (margen suficiente con los datos — nunca
+  garantizado), `tight`, `risky` (RT estimado ya no cubre el cambio; se
+  muestra, no se oculta) y `unknown` (hoy sin RT reciente en ambos tramos;
+  RT >15 min cuenta como ausente).
+- Web: sección «Con un transbordo» en /trayecto con estación de cambio,
+  mínimo, espera y etiqueta programado/estimado por tramo.
+### Enriquecimiento LD opcional (RadarDeTrenes, DESACTIVADO)
+- `rt_ext_ld` + `radar_loop` bajo `RADAR_ENABLED=1` (off por defecto):
+  plataforma, material rodante y ETA próxima parada, siempre etiquetados
+  `source='radar'` con `provider_ts`/`observed_at`/`stale`; reconciliación
+  por (número de tren, fecha de servicio) y métricas en `meta.radar_stats`.
+  Nunca sustituye al dato Renfe ni es requisito para la API.
+### Piloto ADIF — cierre NO_GO
+- Acceso `wss://info.adif.es` bloqueado (HTTP 403 Akamai) también desde el
+  VPS: se descarta sin mecanismos de evasión. Informe en
+  `docs/research/pilot-adif.md`; diseño del planificador en
+  `docs/decisions/planificador-transbordo.md`.
+
 ## [0.3.9] — 2026-10-09
 ### Detector de posibles incidencias calibrado
 - Se calcula en el collector cada minuto y se guarda con historial
