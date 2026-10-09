@@ -116,9 +116,10 @@ services:
   # Sin puertos publicados ni labels de Traefik: el collector llega por http://waha:3000.
   waha:
     profiles: ["waha"]
-    # Versión fijada (no latest): el último tag verificado con el piloto.
-    # Cambiar solo tras probar el nuevo tag; ver docs/whatsapp-waha.md.
-    image: devlikeapro/waha:${WAHA_IMAGE_TAG:-2026.9.2}
+    # Imagen fijada por tag+digest (verificado en Docker Hub 2026-10-09):
+    # no existe tag plano '2026.9.2'; los tags son por motor
+    # (gows|noweb|chrome|latest). Usamos gows, acorde a WHATSAPP_DEFAULT_ENGINE.
+    image: devlikeapro/waha:${WAHA_IMAGE:-gows-2026.9.2@sha256:1ae3c6a994ee97e5039bf41103193d7bf9175f1a31db73ba89bdeed6277901bc}
     restart: unless-stopped
     environment:
       # Motor por defecto GOWS; si falla la lectura de canales, probar WEBJS.

@@ -102,8 +102,10 @@ La API expone este estado en `/api/v1/incidencias` → `sources.whatsapp`
    WAHA_API_KEY=<valor largo y aleatorio>
    ```
 2. Levantar solo el servicio WAHA (sin puertos publicados; los deploys normales no lo tocan).
-   La imagen está fijada por `WAHA_IMAGE_TAG` (defecto `2026.9.2`, el tag vigente en el
-   momento del piloto); para probar otra, exportar `WAHA_IMAGE_TAG=x.y.z` antes:
+   La imagen va fijada por tag+digest en el compose (`WAHA_IMAGE`, defecto
+   `gows-2026.9.2@sha256:1ae3c6a…`). Los tags de WAHA son por motor
+   (`gows-|noweb-|chrome-|latest-`); no existe tag plano de versión.
+   Para probar otra, exportar `WAHA_IMAGE=<motor>-<versión>` antes:
    ```
    sudo docker compose -p trenes -f docker-compose.yml -f infra/compose/docker-compose.prod.yml --profile waha up -d waha
    ```
@@ -120,9 +122,13 @@ La API expone este estado en `/api/v1/incidencias` → `sources.whatsapp`
 4. Escanear el QR **desde el teléfono de pruebas**: WhatsApp > Ajustes > Dispositivos vinculados >
    Vincular un dispositivo. Comprobar que la sesión queda en estado `WORKING`
    (`GET /api/sessions/default` con la cabecera `X-Api-Key`).
-5. Seguir el canal desde la cuenta de pruebas y verificar la lectura:
+5. Seguir el canal desde la cuenta de pruebas y verificar la lectura.
+   Canal oficial de Cercanías Madrid (extraído 2026-10-09 de la página oficial
+   "¡Estamos en WhatsApp!" de grupo.renfe.com — verificar el enlace
+   visualmente antes de seguirlo):
+   `https://www.whatsapp.com/channel/0029VasTM4dBvvseSQb3Pk1B`
    ```
-   waha "http://waha:3000/api/default/channels/<invite>/messages/preview?limit=5"
+   waha "http://waha:3000/api/default/channels/0029VasTM4dBvvseSQb3Pk1B/messages/preview?limit=5"
    ```
    Debe devolver mensajes recientes del canal. Si devuelve error o lista vacía, revisar el motor
    (`WHATSAPP_DEFAULT_ENGINE`) antes de seguir.
@@ -130,7 +136,7 @@ La API expone este estado en `/api/v1/incidencias` → `sources.whatsapp`
    ```
    WAHA_URL=http://waha:3000
    WAHA_SESSION=default
-   WAHA_CHANNELS=<invite>:cercanias-madrid:madrid
+   WAHA_CHANNELS=0029VasTM4dBvvseSQb3Pk1B:cercanias-madrid:madrid
    POLL_WAHA=120
    ```
    Redesplegar el collector con el script habitual: `sudo bash scripts/deploy.sh`.
