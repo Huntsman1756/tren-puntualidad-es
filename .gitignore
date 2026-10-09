@@ -12,3 +12,4 @@ data/
 .tmp/
 .testenv
 pilot_tmp/
+e2e/shots-*/
