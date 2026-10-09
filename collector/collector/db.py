@@ -81,6 +81,10 @@ def _migrate(c):
            GROUP BY feed, source
            ON CONFLICT DO NOTHING"""))
     migrate_push_v2(c)
+    # catálogo curado de enlaces de transbordo entre estaciones (idempotente;
+    # create_all ya ha creado la tabla en este arranque)
+    from collector.transfer_links import seed_transfer_links
+    seed_transfer_links(c)
 
 
 def migrate_push_v2(c):

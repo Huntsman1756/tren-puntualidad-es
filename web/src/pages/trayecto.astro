@@ -56,6 +56,7 @@ const maxDate = coverageMax(coverage, [...feedsOf(from), ...feedsOf(to)]);
 const STATUS_TXT: Record<string, string> = {
   no_direct_window: 'Sin servicios directos en esta franja',
   out_of_coverage: 'Fuera de la cobertura del calendario',
+  transfer_only: 'Solo con transbordo',
   needs_transfer: 'Requiere transbordo',
   different_networks: 'Requiere transbordo entre redes',
 };
@@ -101,7 +102,7 @@ const others = (inc?.items || []).filter((a: any) => a.relevance === 'line_other
       {plan.status === 'no_direct_window' && (
         <p><a href={`/trayecto?${keep({ time: '' })}`}>Ver el día completo</a></p>)}
       {(plan.status === 'needs_transfer' || plan.status === 'different_networks') && (
-        <p class="muted">Este planificador solo calcula trenes directos. Puedes consultar las
+        <p class="muted">No hay conexión verificable en esta franja. Puedes consultar las
           salidas de <a href={`/estacion/${from}`}>{fromName}</a> para ver a qué estaciones hay
           servicio directo.</p>)}
     </div>
@@ -148,6 +149,61 @@ const others = (inc?.items || []).filter((a: any) => a.relevance === 'line_other
         recorrido del {relDay(day, today).toLowerCase()}. prog. = horario programado (sin dato RT).</p>
     </div>
   )}
+
+  {plan?.transfers?.length > 0 && (
+    <div class="card">
+      <div class="jhead">
+        <strong>Con un transbordo</strong>
+        <span class="muted count">{plan.transfers.length} opciones · {relDay(day, today)}</span>
+      </div>
+      <div class="xlist">
+        {plan.transfers.map((x: any) => {
+          const tr = x.transfer;
+          const dep = x.leg1 ? x.leg1.dep_scheduled : tr.dep_suggested;
+          const l1late = x.leg1 && x.leg1.realtime && x.leg1.dep_estimated !== x.leg1.dep_scheduled;
+          return (
+            <div class={`xrow ${x.risk}`}>
+              <div class="jtimes">
+                <span class="t">{fmtTime(dep)}</span>
+                <span class="arrow">→</span>
+                <span class="t">{fmtTime(x.arr_epoch)}</span>
+              </div>
+              <div class="xmeta">
+                <span class="xleg">
+                  {x.leg1
+                    ? <>{x.leg1.line_info?.code || x.leg1.line || x.leg1.train_number}
+                        {x.leg1.train_number ? ` · ${x.leg1.train_number}` : ''}
+                        {l1late && <span class="est"> (est. {fmtTime(x.leg1.dep_estimated)})</span>}</>
+                    : <>A pie desde {tr.at_name || tr.at_stop}</>}
+                </span>
+                <span class="xchg muted">
+                  ⇄ {tr.at_name || tr.at_stop}
+                  {tr.to_stop !== tr.at_stop && <> → {tr.to_name || tr.to_stop}</>}
+                  {' '}· cambio mín. {Math.round(tr.slack_sec / 60)}′
+                  {tr.buffer_sec != null && x.leg1 && <> · espera {Math.round(tr.buffer_sec / 60)}′</>}
+                </span>
+                <span class="xleg">
+                  {x.leg2
+                    ? <>{x.leg2.line_info?.code || x.leg2.line || x.leg2.train_number}
+                        {x.leg2.train_number ? ` · ${x.leg2.train_number}` : ''}
+                        {' '}→ {x.leg2.to_name || x.leg2.to_stop}
+                        {x.leg2.realtime && x.leg2.dep_estimated !== x.leg2.dep_scheduled &&
+                          <span class="est"> (est. {fmtTime(x.leg2.dep_estimated)})</span>}</>
+                    : <>Llegada a pie · {tr.to_name || tr.to_stop}</>}
+                </span>
+              </div>
+              <span class={`badge x-${x.risk}`}>
+                {x.risk === 'ok' ? 'holgado' : x.risk === 'tight' ? 'justo' : 'riesgo RT'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <p class="muted legend">Solo enlaces verificados (misma estación, estación contigua del
+        catálogo o correspondencia oficial). justo = margen estrecho; riesgo RT = la estimación
+        en tiempo real ya no cubre el cambio mínimo — plan alternativo recomendado.</p>
+    </div>
+  )}
 </Base>
 <style>
   .head { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; }
@@ -182,7 +238,24 @@ const others = (inc?.items || []).filter((a: any) => a.relevance === 'line_other
   .tnum { font-size: .78rem; white-space: nowrap; }
   .jmeta .badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .cancelled { opacity: .55; }
+  .xlist { display: flex; flex-direction: column; }
+  .xrow { display: grid; grid-template-columns: 9rem minmax(0,1fr) auto; gap: .6rem;
+          align-items: center; padding: .6rem .3rem; border-top: 1px solid var(--border); }
+  .xrow:first-child { border-top: 0; }
+  .xmeta { display: flex; flex-direction: column; gap: .15rem; min-width: 0;
+           font-size: .82rem; }
+  .xleg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .xchg { font-size: .78rem; }
+  .badge.x-ok { background: #14532d; color: #bbf7d0; }
+  .badge.x-tight { background: #713f12; color: #fde68a; }
+  .badge.x-risky { background: #7f1d1d; color: #fecaca; }
   .legend { font-size: .75rem; margin: .6rem 0 0; }
+  @media (max-width: 560px) {
+    .xrow { grid-template-columns: minmax(0,1fr) auto; }
+    .xrow .jtimes { grid-column: 1; }
+    .xmeta { grid-column: 1 / -1; }
+    .xrow .badge { grid-column: 2; grid-row: 1; align-self: start; }
+  }
   /* Tablet: horas arriba, datos alineados debajo (sin columnas que se aprieten). */
   @media (min-width: 561px) and (max-width: 760px) {
     .jrow { grid-template-columns: minmax(0, 1fr); row-gap: .3rem; }

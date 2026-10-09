@@ -22,6 +22,7 @@ from api.lines_api import router as lines_router
 from api.lines_api import station_lines as _station_lines
 from api.map_api import router as map_router
 from api.notices import router as notices_router
+from api.planner import find_transfers
 from api.push_api import router as push_router
 
 TZ = ZoneInfo("Europe/Madrid")
@@ -657,18 +658,23 @@ def journeys_plan(frm: str = Query(alias="from"), to: str = Query(),
                   date: str | None = None,
                   time_s: str | None = Query(None, alias="time"),
                   hours: int | None = Query(None, ge=1, le=24),
-                  semidirect: bool = False):
-    """Planificador de servicios DIRECTOS con estado explícito:
+                  semidirect: bool = False,
+                  transfers: bool = Query(True, description="calcular opciones con 1 transbordo"),
+                  max_wait: int = Query(120, ge=10, le=480,
+                                        description="espera máxima en el enlace (min)")):
+    """Planificador con estado explícito; calcula también opciones con un
+    transbordo cuando hay enlaces verificables:
 
     - ok                 hay trenes directos en la ventana
+    - transfer_only      no hay directo en la ventana pero sí con transbordo
     - no_direct_window   existen servicios directos en el GTFS, pero no en
                          la fecha/franja consultada
     - out_of_coverage    la fecha no está cubierta por el calendario vigente
                          de la red (no se puede afirmar nada)
-    - needs_transfer     ningún tren del GTFS vigente une ambas estaciones
-                         sin transbordo; los transbordos NO se calculan
-    - different_networks origen y destino no comparten red (CER vs LD):
-                         haría falta transbordo entre redes (no soportado)
+    - needs_transfer     ningún tren une ambas estaciones sin transbordo y
+                         no se encontró ningún enlace verificable
+    - different_networks origen y destino no comparten red y ningún enlace
+                         verificado las conecta
     Sin `time` en una fecha distinta de hoy se consulta el día completo.
     """
     f_pairs = _parse_stops_param(frm)
@@ -679,18 +685,15 @@ def journeys_plan(frm: str = Query(alias="from"), to: str = Query(),
     cov = {f: {k: v for k, v in fc.items() if k != "valid_days"}
            for f, fc in _coverage_days().items()}
     base = {"date": day.isoformat(), "today": today.isoformat(),
-            "scheduled_only": day != today, "transfers_supported": False,
-            "items": [], "coverage": cov, "time": time_s or None}
-    if not combos:
-        return {**base, "status": "different_networks",
-                "message": "Origen y destino no comparten red (Cercanías vs "
-                           "AV/LD): haría falta un transbordo entre redes, "
-                           "que este planificador no calcula."}
+            "scheduled_only": day != today, "transfers_supported": True,
+            "items": [], "transfers": [], "coverage": cov,
+            "time": time_s or None}
     if day < today:
         return {**base, "status": "out_of_coverage", "coverage_gap": None,
                 "message": "Fecha pasada: el planificador solo consulta hoy y "
                            "fechas futuras."}
-    gap = _check_coverage({f for (f, _), _ in combos}, day)
+    feeds_needed = {f for (f, _) in f_pairs} | {f for (f, _) in t_pairs}
+    gap = _check_coverage(feeds_needed, day)
     if gap:
         return {**base, "status": "out_of_coverage", "coverage_gap": gap,
                 "message": "La fecha elegida no está cubierta por el horario "
@@ -699,22 +702,37 @@ def journeys_plan(frm: str = Query(alias="from"), to: str = Query(),
     if t0 is None:
         t0 = max(0, secs_now - 300) if day == today else 0
     span = (hours or (24 if (day != today and not time_s) else 8)) * 3600
-    items = _journey_rows(combos, day, t0, t0 + span, day == today, limit,
-                          semidirect)
     window = {"from_secs": t0, "to_secs": t0 + span}
+    items = (_journey_rows(combos, day, t0, t0 + span, day == today, limit,
+                           semidirect) if combos else [])
+    xfer = (find_transfers(f_pairs, t_pairs, day, t0, span,
+                           is_today=(day == today),
+                           max_wait=max_wait * 60) if transfers else [])
     if items:
-        return {**base, "status": "ok", "items": items, "window": window,
-                "feed_ts": _feed_ts({f for (f, _), _ in combos})}
-    if _ever_direct(combos):
+        return {**base, "status": "ok", "items": items, "transfers": xfer,
+                "window": window,
+                "feed_ts": _feed_ts({f for (f, _) in combos})}
+    if xfer:
+        return {**base, "status": "transfer_only", "transfers": xfer,
+                "window": window,
+                "feed_ts": _feed_ts(feeds_needed),
+                "message": "No hay tren directo en esta franja; estas opciones "
+                           "usan un transbordo verificado."}
+    if combos and _ever_direct(combos):
         return {**base, "status": "no_direct_window", "window": window,
                 "message": "Hay trenes directos entre estas estaciones, pero "
                            "ninguno en la fecha y franja consultadas."
                            + (" Prueba sin el filtro de semidirectos."
                               if semidirect else "")}
+    if not combos:
+        return {**base, "status": "different_networks", "window": window,
+                "message": "Origen y destino no comparten red (Cercanías vs "
+                           "AV/LD) y ningún enlace verificado las conecta "
+                           "en esta franja."}
     return {**base, "status": "needs_transfer", "window": window,
             "message": "Ningún tren del horario vigente une estas estaciones "
-                       "sin transbordo. Este planificador solo calcula "
-                       "servicios directos: no inventamos conexiones."}
+                       "sin transbordo y no se encontró un enlace verificable "
+                       "en la franja consultada."}
 
 
 @v1.get("/trains/by-number/{number}")
@@ -837,6 +855,7 @@ def train(feed: str, trip_id: str, date: str | None = Query(
     if stops:
         flags = {"semidirect": bool(stops[0]["semidirect"]),
                  "skipped_stops": stops[0]["skipped"] or 0}
+    ext = _radar_ext(feed, t["train_number"], day) if feed == "ld" else None
     return {"trip": dict(t), "feed": feed,
             "service_date": day.isoformat(), "runs_on_date": runs,
             "scheduled_only": not rt_on,
@@ -844,8 +863,46 @@ def train(feed: str, trip_id: str, date: str | None = Query(
             "rt": dict(rt) if rt else None,
             "fleet": dict(fl) if fl else None,
             "vehicle": dict(veh) if veh else None,
+            "ext": ext,
             "flags": flags,
             "stops": out_stops}
+
+
+# frescura exigida al dato externo: si el provider_ts tiene más de este
+# margen, el bloque sigue mostrándose pero marcado stale
+_EXT_STALE_S = 15 * 60
+
+
+def _radar_ext(feed: str, train_number: str | None, day) -> dict | None:
+    """Bloque opcional RadarDeTrenes (LD): vía, material rodante y ETA de la
+    próxima parada. Identidad = (train_number, service_date). Siempre con
+    source/provider_ts/observed_at; marca `stale` si el proveedor está
+    caduco. Nunca sustituye al dato Renfe."""
+    if feed != "ld" or not train_number:
+        return None
+    try:
+        with engine.connect() as c:
+            r = c.execute(text("""
+                SELECT platform, rolling_stock, next_stop_id, next_eta,
+                       delay_min, product, provider_ts, observed_at
+                FROM rt_ext_ld WHERE train_number=:n AND service_date=:d"""),
+                {"n": train_number, "d": day}).mappings().first()
+    except Exception:
+        return None  # tabla aún no creada / adaptador desactivado
+    if not r:
+        return None
+    now = int(time.time())
+    stale = (r["provider_ts"] or r["observed_at"] or 0) < now - _EXT_STALE_S
+    return {"source": "radar",
+            "platform": r["platform"],
+            "rolling_stock": r["rolling_stock"],
+            "next_stop_id": r["next_stop_id"],
+            "next_eta": r["next_eta"],
+            "delay_min": r["delay_min"],
+            "product": r["product"],
+            "provider_ts": r["provider_ts"],
+            "observed_at": r["observed_at"],
+            "stale": stale}
 
 
 @v1.get("/delays/ranking")

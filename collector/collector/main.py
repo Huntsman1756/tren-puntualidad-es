@@ -12,15 +12,18 @@ from collector.config import (
     POLL_ALERTS,
     POLL_FLOTA,
     POLL_PUSH,
+    POLL_RADAR,
     POLL_STATIC,
     POLL_TRIP_UPDATES,
     POLL_VEHICLE_POSITIONS,
+    RADAR_ENABLED,
 )
 from collector.db import engine, get_meta, set_meta, wait_and_create
 from collector.geo import run_geo
 from collector.gtfsutil import TZINFO
 from collector.lines import compute_trip_spans, refresh_lines
 from collector.push import run_push_cycle
+from collector.radar import poll_radar
 from collector.realtime import (
     poll_alerts,
     poll_fleet,
@@ -109,6 +112,18 @@ async def push_loop():
         except Exception:
             log.exception("push failed")
         await asyncio.sleep(POLL_PUSH)
+
+
+async def radar_loop():
+    """Enriquecimiento opcional LD vía RadarDeTrenes (RADAR_ENABLED=1)."""
+    while True:
+        try:
+            n = await asyncio.to_thread(poll_radar)
+            if n:
+                log.info("radar: %d trenes LD", n)
+        except Exception:
+            log.exception("radar failed")
+        await asyncio.sleep(POLL_RADAR)
 
 
 async def alerts_loop():
@@ -258,6 +273,8 @@ async def main():
     populated = await asyncio.to_thread(_check_populated)
     rt_loops = (rt_trip_loop(), rt_vehicle_loop(), fleet_loop(),
                 alerts_loop(), push_loop(), anomaly_loop(), notices_loop())
+    if RADAR_ENABLED:
+        rt_loops += (radar_loop(),)
     if populated:
         # BD ya poblada: el RT no espera a la carga. El trabajo pesado y
         # static/maintenance (que recargan el GTFS) van en segundo plano,

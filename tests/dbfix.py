@@ -28,6 +28,7 @@ STOPS = [
     ("cer", "05761", "Cistierna", 42.800, -5.130),
     ("cer", "99999", "Aislada", 40.0, -4.0),
     ("ld", "17000", "Madrid-Puerta de Atocha", 40.406, -3.690),
+    ("ld", "60000", "Madrid-Pta. Atocha AV", 40.4055, -3.6915),
     ("ld", "71801", "Barcelona-Sants", 41.379, 2.140),
 ]
 OFFICIAL = {  # CODIGO_ESTACION -> (NUCLEO, LINEAS) del visor oficial
@@ -62,7 +63,9 @@ TRIPS = [  # feed, trip_id, route, service, train_number
     ("cer", "AST_C1_0600", "20T0001C1", "S_ALL", "23000"),
     ("cer", "BCN_R1_0800", "51T0001R1", "S_ALL", "24000"),
     ("cer", "BIL_C3_0900", "60T0009C3", "S_ALL", "25000"),
+    ("cer", "MAD_C4B_0755", "10T0013C4a", "S_ALL", "22010"),
     ("ld", "LD_03100", "LD_AVE_MAD_BCN", "S_ALL", "03100"),
+    ("ld", "LD_03110", "LD_AVE_MAD_BCN", "S_ALL", "03110"),
 ]
 STOP_TIMES = (
     _st("MAD_C1_0600", [("17000", 6 * H, 6 * H), ("18000", 6 * H + 1200, 6 * H + 1200)])
@@ -75,14 +78,19 @@ STOP_TIMES = (
     + _st("AST_C1_0600", [("15211", 6 * H, 6 * H), ("15410", 6 * H + 1800, 6 * H + 1800)])
     + _st("BCN_R1_0800", [("72400", 8 * H, 8 * H), ("71801", 8 * H + 2400, 8 * H + 2400)])
     + _st("BIL_C3_0900", [("05778", 9 * H, 9 * H), ("05761", 9 * H + 3600, 9 * H + 3600)])
+    + _st("MAD_C4B_0755", [("18000", 7 * H + 3300, 7 * H + 3300),
+                           ("17000", 8 * H + 900, 8 * H + 900)])
     + _st("LD_03100", [("17000", 9 * H, 9 * H), ("71801", 12 * H, 12 * H)])
+    + _st("LD_03110", [("60000", 8 * H + 3600, 8 * H + 3600),
+                       ("71801", 11 * H + 3600, 11 * H + 3600)])
 )
 
 TABLES = ["stops", "routes", "trips", "stop_times", "service_days",
           "trip_flags", "trip_span", "line_route", "station_nucleo",
           "alerts", "alerts_seen", "rt_trip", "rt_stop_update", "rt_fleet",
           "rt_vehicle", "shapes", "shape_quality", "push_rules", "push_devices", "push_subs", "meta",
-          "capture_health", "anomaly_episode", "anomaly_sample", "official_notice"]
+          "capture_health", "anomaly_episode", "anomaly_sample", "official_notice",
+          "gtfs_transfer", "transfer_link", "rt_ext_ld"]
 
 
 def service_days(days_all=range(-1, 8), d2=(2,)):
@@ -116,13 +124,24 @@ def load_scenario(conn):
     for f in ("cer", "ld"):
         compute_trip_spans(conn, f)
     compute_line_routes(conn)
+    from collector.transfer_links import seed_transfer_links
+    seed_transfer_links(conn)
+    # enlace de test: la estación cer:17000 ('Atocha Cercanías' en el
+    # escenario) enlaza a pie con el edificio AV ld:60000
+    conn.execute(text("""
+        INSERT INTO transfer_link(link_id,from_feed,from_stop_id,to_feed,
+                                  to_stop_id,min_secs,kind,label,source)
+        VALUES('test_walk','cer','17000','ld','60000',900,'walk',
+               'Enlace de test','fixture')"""))
 
 
 def reset_api_caches():
     import api.common as common
     import api.incidents as inc
     import api.main as m
+    import api.planner as planner
     common.reset_caches()
+    planner.reset_cache()
     inc._stop_cache["ts"] = 0
     inc._station_routes_cache.clear()
     inc._route_stops_cache.clear()

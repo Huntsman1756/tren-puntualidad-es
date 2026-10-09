@@ -11,3 +11,4 @@ data/
 
 .tmp/
 .testenv
+pilot_tmp/

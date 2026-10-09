@@ -535,3 +535,67 @@ class RtFleet(Base):
     platform = Column(String(16))
     next_platform = Column(String(16))
     ts = Column(BigInteger)
+
+
+class GtfsTransfer(Base):
+    """transfers.txt del GTFS, tal cual (tipo 2 = mínimo obligatorio).
+
+    Solo existe en el feed CER. Las reglas route/trip solo aplican cuando
+    coinciden los extremos; las filas sin route/trip son de nivel parada.
+    """
+    __tablename__ = "gtfs_transfer"
+    feed = Column(String(8), primary_key=True)
+    from_stop_id = Column(String(32), primary_key=True)
+    to_stop_id = Column(String(32), primary_key=True)
+    from_route_id = Column(String(64), primary_key=True, default="")
+    to_route_id = Column(String(64), primary_key=True, default="")
+    from_trip_id = Column(String(64), primary_key=True, default="")
+    to_trip_id = Column(String(64), primary_key=True, default="")
+    transfer_type = Column(Integer)         # 0 recomendado, 1 posible, 2 mínimo, 3 prohibido
+    min_transfer_time = Column(Integer)     # segundos
+
+
+Index("ix_gtfs_transfer_from", GtfsTransfer.feed, GtfsTransfer.from_stop_id)
+
+
+class TransferLink(Base):
+    """Enlace peatonal/intercambiador verificado entre dos paradas del GTFS
+    (posiblemente de feeds distintos). Catálogo curado — NUNCA inferido por
+    proximidad geográfica. min_secs es el tiempo mínimo de intercambio en
+    ese sentido (los enlaces son dirigidos: ida y vuelta pueden diferir)."""
+    __tablename__ = "transfer_link"
+    link_id = Column(String(64), primary_key=True)
+    from_feed = Column(String(8), nullable=False)
+    from_stop_id = Column(String(32), nullable=False)
+    to_feed = Column(String(8), nullable=False)
+    to_stop_id = Column(String(32), nullable=False)
+    min_secs = Column(Integer, nullable=False)
+    kind = Column(String(16), nullable=False)  # complex | walk
+    label = Column(Text)
+    source = Column(Text)                      # evidencia que justifica el enlace
+
+
+Index("ix_transfer_link_from", TransferLink.from_feed, TransferLink.from_stop_id)
+
+
+class RtExtLd(Base):
+    """Enriquecimiento opcional de LD desde RadarDeTrenes (fuente externa).
+
+    Identidad estricta: (train_number, service_date) — nunca solo número.
+    Todo lo que publique la API debe etiquetarse source='radar' y mostrar
+    provider_ts para que el usuario distinga su procedencia."""
+    __tablename__ = "rt_ext_ld"
+    train_number = Column(String(16), primary_key=True)
+    service_date = Column(Date, primary_key=True)
+    platform = Column(String(16))
+    rolling_stock = Column(JSONB)
+    next_stop_id = Column(String(32))
+    next_eta = Column(BigInteger)          # epoch
+    delay_min = Column(Integer)
+    product = Column(String(32))
+    provider_ts = Column(BigInteger)       # timestamp declarado por radar
+    observed_at = Column(BigInteger)       # nuestra hora de recogida
+    source = Column(String(16), default="radar")
+
+
+Index("ix_rt_ext_ld_obs", RtExtLd.observed_at)

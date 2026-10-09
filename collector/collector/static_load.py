@@ -38,7 +38,8 @@ def load_feed(feed: str, path: str, conn):
     today = datetime.now(TZINFO).date()
     counts = {}
 
-    for t in ("stop_times", "service_days", "trips", "routes", "stops", "shapes"):
+    for t in ("stop_times", "service_days", "trips", "routes", "stops", "shapes",
+              "gtfs_transfer"):
         conn.execute(text(f"DELETE FROM {t} WHERE feed=:f"), {"f": feed})
 
     with zipfile.ZipFile(path) as z:
@@ -115,6 +116,23 @@ def load_feed(feed: str, path: str, conn):
                        ["feed", "trip_id", "seq", "stop_id", "arr", "dep"], batch)
             n += len(batch)
         counts["stop_times"] = n
+
+        # transfers.txt (solo lo publica el feed CER; ausente en LD)
+        rows = [
+            (feed, r.get("from_stop_id", ""), r.get("to_stop_id", ""),
+             r.get("from_route_id", ""), r.get("to_route_id", ""),
+             r.get("from_trip_id", ""), r.get("to_trip_id", ""),
+             _i(r.get("transfer_type")), _i(r.get("min_transfer_time")))
+            for r in read_gtfs_csv(z, "transfers.txt")
+            if r.get("from_stop_id") and r.get("to_stop_id")
+        ]
+        if rows:
+            _copy_rows(conn, "gtfs_transfer",
+                       ["feed", "from_stop_id", "to_stop_id",
+                        "from_route_id", "to_route_id",
+                        "from_trip_id", "to_trip_id",
+                        "transfer_type", "min_transfer_time"], rows)
+        counts["transfers"] = len(rows)
 
     conn.execute(text("ANALYZE stop_times"))
     conn.execute(text("ANALYZE trips"))

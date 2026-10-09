@@ -51,3 +51,10 @@ POLL_WAHA = int(os.environ.get("POLL_WAHA", "120"))
 NOTICE_STALE_SEC = int(os.environ.get("NOTICE_STALE_SEC", str(6 * 3600)))
 # un aviso se une a un hilo si el último del hilo tiene menos de esta antigüedad
 NOTICE_THREAD_SEC = int(os.environ.get("NOTICE_THREAD_SEC", str(12 * 3600)))
+
+# RadarDeTrenes (adaptador opcional de enriquecimiento LD; OFF por defecto)
+RADAR_ENABLED = os.environ.get("RADAR_ENABLED", "") == "1"
+RADAR_BASE = os.environ.get("RADAR_BASE", "https://radardetrenes.com/api/v1").rstrip("/")
+RADAR_UA = os.environ.get(
+    "RADAR_UA", "trenes.h1756.es/1.0 (contacto: admin@h1756.es)")
+POLL_RADAR = int(os.environ.get("POLL_RADAR", "60"))

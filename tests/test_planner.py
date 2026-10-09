@@ -36,7 +36,7 @@ def test_midnight_crossing_service_listed_on_wall_clock_day(client):
     assert it["dep_scheduled"] == epoch(D1, 23 * 3600 + 3000)
     assert it["arr_scheduled"] == epoch(D1, 24 * 3600 + 600)  # 00:10 de D1+1
     # el mismo servicio aparece al consultar D2 de madrugada como servicio de D1
-    j2 = plan(client, **{"from": "cer:18000", "to": "cer:17000"}, date=str(D2))
+    j2 = plan(client, **{"from": "cer:15410", "to": "cer:15211"}, date=str(D2))
     assert j2["status"] == "needs_transfer"   # sentido inverso no existe
 
 
@@ -45,12 +45,17 @@ def test_no_direct_in_window_vs_needs_transfer(client):
     assert j["status"] == "no_direct_window"
     j = plan(client, **{"from": "cer:15211", "to": "cer:17000"}, date=str(D1))
     assert j["status"] == "needs_transfer"
-    assert j["transfers_supported"] is False
-    assert "no inventamos" in j["message"]
+    assert j["transfers_supported"] is True
+    assert j["transfers"] == []  # sin enlace verificado: no se inventa
 
 
 def test_different_networks(client):
+    # cer:17000→ld:71801 sí tiene enlace (Atocha Cercanías → AV): transfer_only
     j = plan(client, **{"from": "cer:17000", "to": "ld:71801"}, date=str(D1))
+    assert j["status"] == "transfer_only"
+    assert j["transfers"]
+    # sin enlace verificable sigue siendo different_networks
+    j = plan(client, **{"from": "cer:15211", "to": "ld:71801"}, date=str(D1))
     assert j["status"] == "different_networks"
 
 

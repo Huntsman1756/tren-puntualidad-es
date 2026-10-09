@@ -52,3 +52,29 @@
   NO lo arrancan los deploys; solo `--profile waha` explícito.
 - Usar SIEMPRE una cuenta de WhatsApp de pruebas, nunca la personal (integración no oficial,
   riesgo de restricción de la cuenta). Guía completa: `docs/whatsapp-waha.md`.
+
+## Planificador con transbordo (wip/transbordos)
+
+- `gtfs_transfer`: import verbatim de `transfers.txt` (solo existe en CER;
+  21 filas, la mayoría route→route con `min_transfer_time` en Valencia Nord).
+- `transfer_link`: catálogo CURADO de enlaces entre estaciones físicas
+  distintas (`collector/transfer_links.py`, sembrado en `wait_and_create`).
+  Reglas: solo enlaces verificados con fuente; dirigidos (min_secs puede ser
+  asimétrico); NUNCA inferir por proximidad geográfica.
+- Planner: `api/api/planner.py::find_transfers` — T1 → arista → T2 acotado,
+  slack por defecto cer→cer 5′, cer→ld/ld→ld 15′, ld→cer 10′. Enlaces
+  tipo leg0 (caminar al origen) y leg3 (caminar al destino) incluidos.
+  Estado nuevo `transfer_only`; `transfers` siempre se devuelve en /plan.
+- Riesgo: `ok`/`tight` (<1,5×slack)/`risky` (RT estimado incumple slack —
+  se muestra, nunca se oculta).
+
+## Adaptador RadarDeTrenes (opcional)
+
+- `RADAR_ENABLED=1` activa `radar_loop` (POLL_RADAR, defecto 60 s).
+- Tabla `rt_ext_ld(train_number, service_date, …)`: plataforma, material
+  rodante, ETA próxima parada, delay_min, provider_ts, observed_at,
+  source='radar'. Identidad estricta (número+fecha); métricas en
+  meta['radar_stats']. La API lo expone como `ext` en /trains/ld/{id} con
+  flag `stale` (>15 min sin dato del proveedor). Nunca sustituye al dato
+  Renfe; si cae, la API sigue igual.
+- NO cubre Ouigo/Iryo (la API pública solo devuelve operador RF).

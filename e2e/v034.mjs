@@ -87,6 +87,15 @@ for (const mob of [false, true]) {
     await pg.waitForSelector('text=Requiere transbordo', { timeout: 10000 });
   });
 
+  await run('trayecto entre redes: opciones con un transbordo', mob, async (pg) => {
+    await pg.goto(`${BASE}/trayecto?from=cer:17000&to=ld:71801&date=${D1}`, { waitUntil: 'networkidle' });
+    await pg.waitForSelector('text=Con un transbordo', { timeout: 15000 });
+    const first = pg.locator('.xrow').first();
+    const txt = await first.textContent();
+    expect(/cambio mín\. \d+′/.test(txt), 'sin tiempo mínimo de cambio: ' + txt);
+    expect(await pg.locator('.xrow .badge').first().textContent(), 'sin distintivo de margen');
+  });
+
   await run('trayecto fuera de cobertura', mob, async (pg) => {
     await pg.goto(`${BASE}/trayecto?from=cer:17000&to=cer:18000&date=2030-01-01`, { waitUntil: 'networkidle' });
     await pg.waitForSelector('text=Fuera de la cobertura del calendario', { timeout: 10000 });
