@@ -74,7 +74,8 @@ if (f.estado && ESTADO_GTFS[f.estado]) {
 } else if (f.estado === 'sin_actualizar') {
   gtfsItems = [];   // no existe equivalente en el feed oficial
 }
-const gtfsStale = !!data?.source?.content_stale;
+const gtfsStale = !!data?.source?.content_stale
+  || ['down', 'stale', 'unknown'].includes(data?.source?.status);
 const showA = !f.fuente || ['whatsapp', 'manual'].includes(f.fuente);
 const showB = !f.fuente || f.fuente === 'inferidas';
 const showC = !f.fuente || f.fuente === 'gtfs';

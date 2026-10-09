@@ -164,8 +164,9 @@ for (const mob of [false, true]) {
     await pg.waitForSelector('h2', { timeout: 10000 });
     const frozen = pg.locator('details.frozen');
     if (await frozen.count()) {
+      expect(await frozen.count() === 1, `varios bloques .frozen: ${await frozen.count()}`);
       expect(!(await frozen.first().getAttribute('open')), 'feed antiguo desplegado por defecto');
-      const sum = await frozen.locator('summary').textContent();
+      const sum = await frozen.locator('> summary').textContent();
       expect(/no son novedades de hoy/.test(sum), 'sin aviso de antigüedad: ' + sum);
     }
   });
