@@ -1,5 +1,46 @@
 # Changelog
 
+## [Unreleased]
+### Avisos oficiales / WAHA (experimental, sigue desactivado)
+- El adaptador `_msg_fields` entiende el envoltorio real de
+  `messages/preview` (`{reactions, viewCount, message:{id,timestamp,body}}`)
+  además del mensaje plano; timestamps en ms normalizados; cada descarte
+  lleva motivo y una respuesta no interpretable degrada el canal en lugar
+  de contarse como captura sana.
+- El ciclo comprueba el estado de la sesión, respeta `POLL_WAHA` y
+  registra en `meta` frescura, contadores y motivo de degradación; la API
+  lo expone en `/api/v1/incidencias → sources.whatsapp`
+  (`ok|stale|down|degraded|disabled`).
+- Mensajes capturados fuera de orden se reconcilian con hilos ya
+  cerrados; las asociaciones dudosas quedan `ambiguous` (thread_id NULL)
+  en lugar de adivinar. Contador `unclassified` en `process_pending`.
+- `official_notice` gana `verified` y `source_url`: la entrada manual se
+  muestra "pendiente de verificación" hasta el endpoint admin
+  `POST /admin/avisos/{id}/verificar`; `POST /admin/avisos/{id}/hilo`
+  corrige asociaciones ambiguas.
+- Compose: imagen WAHA fijada por `WAHA_IMAGE_TAG` (defecto 2026.9.2),
+  `WAHA_API_KEY` obligatorio, límites de CPU/memoria y healthcheck.
+### Incidencias (página)
+- Nueva jerarquía centrada en "qué pasa ahora": avisos de canales
+  oficiales → inferidas por retrasos → feed GTFS-RT. Filtros nuevos
+  `estado` y `fuente` persistentes en URL. Con el feed sin cambios, los
+  avisos antiguos se agrupan plegados con la fecha del último cambio.
+- `OfficialNotices` compacta: chips de línea, estado, efectos declarados,
+  ambigüedad marcada y texto íntegro expandible.
+### RadarDeTrenes (piloto, sigue OFF)
+- Unicidad de instancia: `rt_ext_ld.instances` cuenta los `trip_id`
+  candidatos por (número, fecha); con >1 la API marca `ambiguous` y no
+  verifica el enriquecimiento. Piloto medido en
+  `docs/research/pilot-radar.md` → GO condicionado.
+### Docs
+- `docs/decisions/seguimiento-personalizado.md`: diseño MVP de
+  seguimiento de trenes (P4, no implementado).
+### Rollback
+- WAHA: quitar `WAHA_URL` y redesplegar collector (ver
+  docs/whatsapp-waha.md → Rollback); web/API se revierten al tag previo.
+  Los avisos capturados se conservan.
+- Radar/Stats siguen OFF por defecto.
+
 ## [0.3.12] — 2026-10-09
 ### Planificador — reglas GTFS específicas (corrección)
 - Una regla `transfers.txt` con filtros `from/to_route_id` o

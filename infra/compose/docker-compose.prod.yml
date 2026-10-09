@@ -116,23 +116,32 @@ services:
   # Sin puertos publicados ni labels de Traefik: el collector llega por http://waha:3000.
   waha:
     profiles: ["waha"]
-    # TODO: fijar un tag probado tras el piloto (no usar latest en producción).
-    image: devlikeapro/waha:latest
+    # Imagen fijada por tag+digest (verificado en Docker Hub 2026-10-09):
+    # no existe tag plano '2026.9.2'; los tags son por motor
+    # (gows|noweb|chrome|latest). Usamos gows, acorde a WHATSAPP_DEFAULT_ENGINE.
+    image: devlikeapro/waha:${WAHA_IMAGE:-gows-2026.9.2@sha256:1ae3c6a994ee97e5039bf41103193d7bf9175f1a31db73ba89bdeed6277901bc}
     restart: unless-stopped
     environment:
       # Motor por defecto GOWS; si falla la lectura de canales, probar WEBJS.
       WHATSAPP_DEFAULT_ENGINE: GOWS
-      WAHA_API_KEY: ${WAHA_API_KEY:-}
+      WAHA_API_KEY: ${WAHA_API_KEY:?WAHA_API_KEY requerido para el perfil waha}
       WAHA_DASHBOARD_ENABLED: "false"
       WHATSAPP_RESTART_ALL_SESSIONS: "true"
     volumes:
       - waha_sessions:/app/.sessions
     networks:
       - default
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\""]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
+          cpus: "1.0"
 
 networks:
   coolify:

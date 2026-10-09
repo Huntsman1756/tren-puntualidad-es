@@ -2,6 +2,7 @@
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -370,6 +371,10 @@ class OfficialNotice(Base):
     is_update = Column(Integer, default=0)
     thread_id = Column(BigInteger)
     parse = Column(JSONB)  # evidencia del parser
+    # procedencia verificada: whatsapp = canal allowlist validado por
+    # configuración; manual = pendiente hasta verificación administrativa
+    verified = Column(Boolean)
+    source_url = Column(Text)  # de dónde se copió un aviso manual (opcional)
 
 
 Index(
@@ -629,6 +634,10 @@ class RtExtLd(Base):
     # proveedor), 'coverage' (único día en service_days), 'coverage_multi'
     # (varios días posibles — instancia ambigua) o 'civil' (sin verificar)
     identity_src = Column(String(16))
+    # nº de trip_id del GTFS que casan con (train_number, service_date):
+    # 1 = instancia única verificada; >1 = el número comercial agrupa
+    # etapas y los campos (vía, ETA) pueden ser de otra etapa
+    instances = Column(Integer)
 
 
 Index("ix_rt_ext_ld_obs", RtExtLd.observed_at)

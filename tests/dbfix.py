@@ -132,7 +132,9 @@ TABLES = [
 ]
 
 
-def service_days(days_all=range(-1, 8), d2=(2,)):
+def service_days(days_all=None, d2=(2,)):
+    if days_all is None:
+        days_all = range(-1, 8)
     rows = []
     for f in ("cer", "ld"):
         rows += [(f, "S_ALL", TODAY + timedelta(days=i)) for i in days_all]

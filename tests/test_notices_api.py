@@ -28,15 +28,18 @@ def _clean(engine):
 
 
 def _row(engine, now, ext, posted, status, thread_id=None, lines=(), stations=(),
-         kind=None, is_update=0, source="whatsapp", nucleo="10", body="texto"):
+         kind=None, is_update=0, source="whatsapp", nucleo="10", body="texto",
+         verified=None):
     with engine.begin() as c:
         c.execute(text("""INSERT INTO official_notice (source, channel, external_id,
             posted_at, received_at, text, nucleo_code, lines, stations, kind, status,
-            is_update, thread_id) VALUES (:src, 'cercanias-madrid', :ext, :p, :p, :t,
-            :n, CAST(:l AS jsonb), CAST(:s AS jsonb), :k, :st, :u, :th)"""),
+            is_update, thread_id, verified) VALUES (:src, 'cercanias-madrid', :ext,
+            :p, :p, :t, :n, CAST(:l AS jsonb), CAST(:s AS jsonb), :k, :st, :u,
+            :th, :v)"""),
             {"src": source, "ext": ext, "p": posted, "t": body, "n": nucleo,
              "l": json.dumps(list(lines)), "s": json.dumps(list(stations)),
-             "k": kind, "st": status, "u": is_update, "th": thread_id})
+             "k": kind, "st": status, "u": is_update, "th": thread_id,
+             "v": verified})
 
 
 @pytest.fixture()
@@ -134,13 +137,19 @@ def test_threads_open_vs_all_and_manual_attribution(client, notices):
     _row(eng, now, "closed", now - 300, "normalizada", thread_id=9200, lines=["C2"])
     _row(eng, now, "man", now - 900, "activa", thread_id=9300, source="manual",
          lines=["C3"], body="Pegado a mano")
+    _row(eng, now, "manv", now - 800, "activa", thread_id=9400, source="manual",
+         lines=["C7"], body="Pegado y verificado", verified=True)
     abiertos = {t["thread_id"] for t in client.get(THREADS).json()["items"]}
-    assert abiertos == {9300}                  # normalizada fuera; >24 h sin novedades fuera
+    assert abiertos == {9300, 9400}            # normalizada fuera; >24 h sin novedades fuera
     todos = {t["thread_id"]: t for t in
              client.get(THREADS, params={"estado": "todos"}).json()["items"]}
-    assert set(todos) == {9100, 9200, 9300}
-    assert todos[9300]["attribution"].endswith("· pegado manualmente")
-    assert todos[9300]["source"] == "manual"
+    assert set(todos) == {9100, 9200, 9300, 9400}
+    # sin verificación administrativa no se afirma la atribución oficial
+    assert todos[9300]["attribution"].endswith(
+        "pegado manualmente (pendiente de verificación)")
+    assert todos[9300]["source"] == "manual" and todos[9300]["verified"] is False
+    assert todos[9400]["attribution"].endswith("· pegado manualmente")
+    assert todos[9400]["verified"] is True
     assert not todos[9100]["attribution"].endswith("manualmente")
 
 
@@ -172,3 +181,68 @@ def test_incidencias_includes_official_notices(client, notices):
     assert c1["official_notices"] == []
     asturias = client.get("/api/v1/incidencias", params={"nucleo": "asturias"}).json()
     assert asturias["official_notices"] == []
+
+
+@pytest.mark.integration
+def test_admin_verificar_marca_procedencia(client, notices):
+    eng, _ = notices
+    h = {"Authorization": f"Bearer {TOKEN}"}
+    r = client.post(ADMIN, json={**BODY, "source_url": "https://example.test/avisos"},
+                    headers=h).json()
+    vid = r["id"]
+    assert client.post(f"{ADMIN}/{vid}/verificar", json={}).status_code == 401
+    r2 = client.post(f"{ADMIN}/{vid}/verificar", json={}, headers=h)
+    assert r2.status_code == 200 and r2.json()["verified"] is True
+    with eng.connect() as c:
+        row = c.execute(text(
+            "SELECT verified, source_url FROM official_notice WHERE id=:i"),
+            {"i": vid}).mappings().one()
+    assert row["verified"] is True
+    assert row["source_url"] == "https://example.test/avisos"
+    assert client.post(f"{ADMIN}/999999/verificar", json={}, headers=h).status_code == 404
+
+
+@pytest.mark.integration
+def test_admin_reasignar_hilo_corrige_ambiguo(client, notices):
+    eng, now = notices
+    h = {"Authorization": f"Bearer {TOKEN}"}
+    _row(eng, now, "t-a", now - 600, "activa", thread_id=8001, lines=["C5"])
+    # aviso ambiguo: thread_id NULL
+    _row(eng, now, "amb", now - 300, "activa", thread_id=None, lines=["C5"])
+    amb = eng.connect().execute(text(
+        "SELECT id FROM official_notice WHERE external_id='amb'")).scalar()
+    assert client.post(f"{ADMIN}/{amb}/hilo", json={"thread_id": 8001}).status_code == 401
+    r = client.post(f"{ADMIN}/{amb}/hilo", json={"thread_id": 8001}, headers=h)
+    assert r.status_code == 200 and r.json()["thread_id"] == 8001
+    assert client.post(f"{ADMIN}/{amb}/hilo", json={"thread_id": 7777},
+                       headers=h).status_code == 404
+    items = {m["id"]: t for t in
+             client.get(THREADS, params={"estado": "todos"}).json()["items"]
+             for m in t["messages"]}
+    assert items[amb]["thread_id"] == 8001
+
+
+@pytest.mark.integration
+def test_salud_whatsapp_en_incidencias(client, notices):
+    """La respuesta de /incidencias informa de la fuente WhatsApp sin
+    confundirla con la salud del feed GTFS-RT."""
+    eng, now = notices
+    with eng.begin() as c:
+        c.execute(text("DELETE FROM meta WHERE key LIKE 'whatsapp%'"))
+    r = client.get("/api/v1/incidencias").json()
+    assert r["sources"]["whatsapp"]["status"] == "disabled"
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO meta(key, value) VALUES "
+                       "('whatsapp_session_status','WORKING'),"
+                       "('whatsapp_fetch_ok_cercanias-madrid',:ok)"),
+                  {"ok": str(now)})
+    r = client.get("/api/v1/incidencias").json()
+    wa = r["sources"]["whatsapp"]
+    assert wa["status"] == "ok" and wa["session"] == "WORKING"
+    assert wa["channels"]["cercanias-madrid"]["status"] == "ok"
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO meta(key, value) VALUES "
+                       "('whatsapp_session_status','STOPPED') "
+                       "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value"))
+    r = client.get("/api/v1/incidencias").json()
+    assert r["sources"]["whatsapp"]["status"] == "degraded"

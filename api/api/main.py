@@ -307,6 +307,42 @@ def _parse_stops_param(stops: str):
     return pairs
 
 
+def _resolve_stops(stops: str):
+    """Parsea `feed:id[,…]` o `id` sin prefijo y verifica existencia.
+
+    Contrato: un `id` con prefijo debe existir en esa red; un `id` sin
+    prefijo resuelve a las redes donde exista (se descartan las demás).
+    Cualquier id que no exista en la red indicada —o en ninguna— es un
+    error de parámetros (400), no una respuesta vacía silenciosa."""
+    explicit, loose = [], []
+    for part in (p.strip() for p in stops.split(",") if p.strip()):
+        if ":" in part:
+            f, sid = part.split(":", 1)
+            if f not in ("cer", "ld"):
+                raise HTTPException(400, f"feed desconocido: {f}")
+            explicit.append((f, sid))
+        else:
+            loose.append(part)
+    if not explicit and not loose:
+        raise HTTPException(400, "stops vacío")
+    with engine.connect() as c:
+        known = {(f, s) for f, s in c.execute(text(
+            "SELECT feed, stop_id FROM stops"
+            " WHERE feed=ANY(:f) AND stop_id=ANY(:s)"),
+            {"f": ["cer", "ld"], "s": [s for _, s in explicit] + loose})}
+    bad = [f"{f}:{s}" for f, s in explicit if (f, s) not in known]
+    if bad:
+        raise HTTPException(
+            400, "estación desconocida: " + ", ".join(sorted(set(bad))))
+    pairs = list(explicit)
+    for sid in loose:
+        found = [(f, sid) for f in ("cer", "ld") if (f, sid) in known]
+        if not found:
+            raise HTTPException(400, f"estación desconocida: {sid}")
+        pairs += found
+    return pairs
+
+
 def _board(feed: str, stop_id: str, kind: str, lo: int, hi: int,
            day, with_rt: bool, limit: int, only_semidirect: bool = False):
     col = "dep" if kind == "departures" else "arr"
@@ -437,8 +473,9 @@ def station_board_multi(
         time_s: str | None = Query(None, alias="time", description="HH:MM local"),
         semidirect: bool = Query(False, description="solo servicios que omiten >=2 paradas")):
     """Tablero combinado: admite varias paradas (estación física en ambas redes).
-    En fechas ≠ hoy devuelve solo horario programado (nunca retrasos de hoy)."""
-    pairs = _parse_stops_param(stops)
+    En fechas ≠ hoy devuelve solo horario programado (nunca retrasos de hoy).
+    Un stop_id que no existe en la red indicada es un 400, no una lista vacía."""
+    pairs = _resolve_stops(stops)
     day, lo, hi, is_today = _window(date, time_s, minutes)
     items = []
     for feed, sid in pairs:
@@ -636,8 +673,8 @@ def journeys(frm: str = Query(alias="from"), to: str = Query(),
              response: Response = None):
     """Trayectos directos origen→destino (lista, compatibilidad v0.2).
     Para estados diferenciados usar /journeys/plan."""
-    f_pairs = _parse_stops_param(frm)
-    t_pairs = _parse_stops_param(to)
+    f_pairs = _resolve_stops(frm)
+    t_pairs = _resolve_stops(to)
     combos = [(f, t) for f in f_pairs for t in t_pairs if f[0] == t[0]]
     if not combos:
         raise HTTPException(400, "origen y destino deben compartir red (cer|ld)")
@@ -677,8 +714,8 @@ def journeys_plan(frm: str = Query(alias="from"), to: str = Query(),
                          verificado las conecta
     Sin `time` en una fecha distinta de hoy se consulta el día completo.
     """
-    f_pairs = _parse_stops_param(frm)
-    t_pairs = _parse_stops_param(to)
+    f_pairs = _resolve_stops(frm)
+    t_pairs = _resolve_stops(to)
     combos = [(f, t) for f in f_pairs for t in t_pairs if f[0] == t[0]]
     _, secs_now, today = _now()
     day = _parse_date(date) or today
@@ -885,7 +922,7 @@ def _radar_ext(feed: str, train_number: str | None, day) -> dict | None:
             r = c.execute(text("""
                 SELECT platform, rolling_stock, next_stop_id, next_eta,
                        delay_min, product, provider_ts, observed_at,
-                       identity_src
+                       identity_src, instances
                 FROM rt_ext_ld WHERE train_number=:n AND service_date=:d"""),
                 {"n": train_number, "d": day}).mappings().first()
     except Exception:
@@ -894,6 +931,10 @@ def _radar_ext(feed: str, train_number: str | None, day) -> dict | None:
         return None
     now = int(time.time())
     stale = (r["provider_ts"] or r["observed_at"] or 0) < now - _EXT_STALE_S
+    # instancia única = 1 trip_id GTFS para (número, fecha); >1 el número
+    # comercial agrupa etapas y vía/ETA pueden corresponder a otra etapa
+    inst = r["instances"]
+    ambiguous = inst is not None and inst > 1
     return {"source": "radar",
             "platform": r["platform"],
             "rolling_stock": r["rolling_stock"],
@@ -904,7 +945,10 @@ def _radar_ext(feed: str, train_number: str | None, day) -> dict | None:
             "provider_ts": r["provider_ts"],
             "observed_at": r["observed_at"],
             "identity_src": r["identity_src"],
-            "verified": r["identity_src"] in ("launching", "coverage"),
+            "instances": inst,
+            "ambiguous": ambiguous,
+            "verified": (r["identity_src"] in ("launching", "coverage")
+                         and inst == 1),
             "stale": stale}
 
 

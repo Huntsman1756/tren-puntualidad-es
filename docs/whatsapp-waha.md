@@ -21,7 +21,72 @@ y convertirlos en avisos oficiales de la web (`/api/v1/avisos-oficiales`), agrup
 - **Problemas upstream.** La lectura de canales depende del motor (`GOWS` por defecto; `WEBJS`
   como alternativa). Algunos motores o versiones han tenido incidencias con canales: si no llegan
   mensajes, probar el otro motor antes de dar el piloto por fallido.
-- **Versión sin fijar.** La imagen está en `latest` durante el piloto; fijar un tag probado al terminar.
+- **Edición y borrado.** WAHA no ofrece un canal fiable para enterarnos de mensajes de canal
+  editados o borrados (no hay evento de edición en la vista previa). Limitación documentada:
+  conservamos el texto tal como se capturó y nunca borramos un aviso porque deje de
+  aparecer en la vista previa.
+
+## Contrato JSON verificado (documentación WAHA + código core)
+
+`GET /api/{session}/channels/{invite}/messages/preview` devuelve una **lista** cuyos
+elementos envuelven el mensaje real:
+
+```json
+[
+  {
+    "reactions": {"👍": 10},
+    "viewCount": 0,
+    "message": {
+      "id": "false_123@newsletter_AAAA",
+      "timestamp": 1666943582,
+      "body": "texto",
+      "media": {}
+    }
+  }
+]
+```
+
+- El adaptador (`collector/notices.py::_msg_fields`) acepta ese envoltorio **y** el
+  mensaje plano que devuelve `GET /api/{session}/chats/{channelId}/messages`
+  (`{id, timestamp, body, hasMedia, ...}`, mismo objeto que el evento `message`).
+- `timestamp` puede venir en segundos o milisegundos (se normaliza a s).
+- Un mensaje sin `body`/`text` (multimedia sin pie) se descarta contando el motivo;
+  cualquier estructura no reconocida marca el canal como **degradado**
+  (`meta: whatsapp_degraded_{canal}`), nunca como captura sana.
+- El endpoint existe en el controlador del repositorio público `core`
+  (`previewChannelMessages` lanza `NotImplementedByEngineError` en la base, no
+  `AvailableInPlusVersion`) y la tabla de funciones lo marca disponible en WEBJS, WPP,
+  NOWEB y GOWS. Las funciones de *búsqueda* de canales son Plus; el preview aparece
+  junto a ellas en la documentación, así que la disponibilidad real en la imagen Core
+  **debe confirmarse en el piloto** antes de dar por buena la integración.
+- `GET /api/{session}/chats/{channelId}/messages` (canal seguido) es alternativa
+  compatible con WEBJS/WPP/NOWEB pero **no con GOWS** (issue #433).
+
+## Qué registra el ciclo (meta)
+
+| clave | contenido |
+|---|---|
+| `whatsapp_session_status` | estado de la sesión (`WORKING`, `STOPPED`, …) |
+| `whatsapp_session_degraded` | epoch del último ciclo con sesión no operativa |
+| `whatsapp_fetch_ok_{canal}` | epoch de la última descarga HTTP correcta |
+| `whatsapp_fetch_err_{canal}` / `_errmsg_` | último fallo y mensaje (sin secretos) |
+| `whatsapp_degraded_{canal}` | motivo de degradación con respuesta 200 |
+| `whatsapp_last_msg_{canal}` | `posted_at` más reciente visto (frescura del contenido) |
+| `whatsapp_stats_{canal}` | JSON acumulado: received, inserted, duplicated, discarded{motivo}, fetch_errors, degraded, late, latency_max, unclassified (en `_all`) |
+
+La API expone este estado en `/api/v1/incidencias` → `sources.whatsapp`
+(`ok|stale|down|degraded|disabled`), siempre como degradación de ESA fuente.
+
+## Cadencia y retención
+
+- `POLL_WAHA` (por defecto 120 s) separa sondeos reales; el loop del collector sigue
+  procesando pendientes cada minuto aunque no toque sondear.
+- Textos de avisos: se conservan íntegros (son publicaciones oficiales públicas, no
+  datos personales). Los contadores de meta no guardan contenido; los descartes solo
+  retienen el motivo, nunca el cuerpo. No se guarda ningún mensaje de conversaciones
+  privadas: solo se leen los canales de la allowlist `WAHA_CHANNELS`.
+- Los avisos capturados no se borran aunque desaparezcan de la vista previa; un hilo
+  sin novedades pasa a `sin_actualizar` (nunca se presume resuelto).
 
 ## Requisitos previos
 
@@ -36,7 +101,11 @@ y convertirlos en avisos oficiales de la web (`/api/v1/avisos-oficiales`), agrup
    ```
    WAHA_API_KEY=<valor largo y aleatorio>
    ```
-2. Levantar solo el servicio WAHA (sin puertos publicados; los deploys normales no lo tocan):
+2. Levantar solo el servicio WAHA (sin puertos publicados; los deploys normales no lo tocan).
+   La imagen va fijada por tag+digest en el compose (`WAHA_IMAGE`, defecto
+   `gows-2026.9.2@sha256:1ae3c6a…`). Los tags de WAHA son por motor
+   (`gows-|noweb-|chrome-|latest-`); no existe tag plano de versión.
+   Para probar otra, exportar `WAHA_IMAGE=<motor>-<versión>` antes:
    ```
    sudo docker compose -p trenes -f docker-compose.yml -f infra/compose/docker-compose.prod.yml --profile waha up -d waha
    ```
@@ -53,9 +122,13 @@ y convertirlos en avisos oficiales de la web (`/api/v1/avisos-oficiales`), agrup
 4. Escanear el QR **desde el teléfono de pruebas**: WhatsApp > Ajustes > Dispositivos vinculados >
    Vincular un dispositivo. Comprobar que la sesión queda en estado `WORKING`
    (`GET /api/sessions/default` con la cabecera `X-Api-Key`).
-5. Seguir el canal desde la cuenta de pruebas y verificar la lectura:
+5. Seguir el canal desde la cuenta de pruebas y verificar la lectura.
+   Canal oficial de Cercanías Madrid (extraído 2026-10-09 de la página oficial
+   "¡Estamos en WhatsApp!" de grupo.renfe.com — verificar el enlace
+   visualmente antes de seguirlo):
+   `https://www.whatsapp.com/channel/0029VasTM4dBvvseSQb3Pk1B`
    ```
-   waha "http://waha:3000/api/default/channels/<invite>/messages/preview?limit=5"
+   waha "http://waha:3000/api/default/channels/0029VasTM4dBvvseSQb3Pk1B/messages/preview?limit=5"
    ```
    Debe devolver mensajes recientes del canal. Si devuelve error o lista vacía, revisar el motor
    (`WHATSAPP_DEFAULT_ENGINE`) antes de seguir.
@@ -63,7 +136,7 @@ y convertirlos en avisos oficiales de la web (`/api/v1/avisos-oficiales`), agrup
    ```
    WAHA_URL=http://waha:3000
    WAHA_SESSION=default
-   WAHA_CHANNELS=<invite>:cercanias-madrid:madrid
+   WAHA_CHANNELS=0029VasTM4dBvvseSQb3Pk1B:cercanias-madrid:madrid
    POLL_WAHA=120
    ```
    Redesplegar el collector con el script habitual: `sudo bash scripts/deploy.sh`.
@@ -76,6 +149,11 @@ y convertirlos en avisos oficiales de la web (`/api/v1/avisos-oficiales`), agrup
   aunque se sondee repetidamente.
 - Los mensajes quedan agrupados en el hilo correcto (la actualización aparece bajo la incidencia, no como hilo nuevo).
 - `curl localhost:8000/api/v1/avisos-oficiales` responde con datos y el collector no acumula errores `WAHA ... fallo al leer canal`.
+- `/api/v1/incidencias` → `sources.whatsapp.status == "ok"` y `whatsapp_last_msg_{canal}`
+  avanza cuando el canal publica. Si `status` es `degraded` o `down`, el piloto no
+  está capturando aunque el HTTP responda.
+- Una cuenta vinculada (sesión `WORKING`) **no** equivale a captura funcionando: el
+  gate es ver un aviso real del canal interpretado y agrupado en su hilo.
 
 ## Rollback
 

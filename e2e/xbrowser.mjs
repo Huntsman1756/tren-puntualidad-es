@@ -38,7 +38,7 @@ if (SHOTS) mkdirSync(SHOTS, { recursive: true });
 
 const ENGINES = { chromium, firefox, webkit };
 const PROFILES = ['desktop', 'tablet', 'mobile'];
-const PAGES = [
+const PAGES = process.env.PAGES ? JSON.parse(process.env.PAGES) : [
   '/', '/horarios', '/lineas', '/lineas?q=C1', '/nucleos', '/nucleos/madrid',
   '/lineas/madrid/c4', '/incidencias', '/retrasos', '/retrasos?vista=lineas',
   '/estacion/cer:18000,ld:18000', '/trayecto?from=cer:17000&to=cer:18000',

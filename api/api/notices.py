@@ -5,9 +5,11 @@
 - Las filas 'pendiente' nunca se muestran.
 - POST /admin/avisos: alta manual protegida por ADMIN_TOKEN (Bearer).
 """
+import contextlib
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import time
@@ -21,6 +23,7 @@ from api.common import NUCLEO_BY_SLUG, TZ, nucleo_public
 from api.db import engine
 
 router = APIRouter(prefix="/api/v1")
+log = logging.getLogger("api.notices")
 
 OPEN_STATUSES = ("activa", "en_recuperacion", "sin_actualizar")
 DEFAULT_CHANNEL = "cercanias-madrid"
@@ -36,10 +39,14 @@ def _thread_key(r) -> int:
     return r["thread_id"] if r["thread_id"] is not None else r["id"]
 
 
-def _attribution(nuc: dict | None, source: str) -> str:
+def _attribution(nuc: dict | None, source: str, verified: bool) -> str:
     name = nuc["name"] if nuc else ""
     base = f"Canal oficial de WhatsApp de Renfe Cercanías {name}".rstrip()
-    return base + (" · pegado manualmente" if source == "manual" else "")
+    if source != "manual":
+        return base
+    # sin verificación administrativa no se afirma la atribución oficial
+    return base + (" · pegado manualmente" if verified
+                   else " · pegado manualmente (pendiente de verificación)")
 
 
 def _build(rows) -> list[dict]:
@@ -62,22 +69,42 @@ def _build(rows) -> list[dict]:
                 ident = k or f"name:{s.get('name')}"
                 stations.setdefault(ident, {"name": s.get("name"),
                                             "stop_id": sid, "key": k})
+        effects = sorted({e for m in msgs
+                          for e in ((m.get("parse") or {}).get("effects") or [])})
+        salida_hora = next(((m.get("parse") or {}).get("salida_hora")
+                            for m in reversed(msgs)
+                            if (m.get("parse") or {}).get("salida_hora")), None)
+        # un aviso capturado del canal allowlist está verificado por la vía
+        # de captura; un pegado manual lo está solo tras verificación admin
+        thread_verified = all(
+            m["verified"] if m["verified"] is not None else m["source"] == "whatsapp"
+            for m in msgs)
         out.append({
             "thread_id": key,
             "channel": first["channel"],
             "source": first["source"],
+            "verified": thread_verified,
             "nucleo": nuc,
             "lines": sorted({ln for m in msgs for ln in (m["lines"] or [])}),
             "stations": list(stations.values()),
             "kind": first["kind"],
+            "effects": effects,
+            "salida_hora": salida_hora,
             "status": last["status"],
             "opened_at": first["posted_at"],
             "updated_at": last["posted_at"],
+            "ambiguous": any((m.get("parse") or {}).get("ambiguous")
+                             for m in msgs),
             "messages": [{"id": m["id"], "posted_at": m["posted_at"],
                           "text": m["text"], "status": m["status"],
-                          "is_update": bool(m["is_update"]), "kind": m["kind"]}
+                          "is_update": bool(m["is_update"]), "kind": m["kind"],
+                          "source": m["source"],
+                          "verified": (m["verified"] if m["verified"] is not None
+                                       else m["source"] == "whatsapp"),
+                          "source_url": m.get("source_url"),
+                          "ambiguous": bool((m.get("parse") or {}).get("ambiguous"))}
                          for m in msgs],
-            "attribution": _attribution(nuc, first["source"]),
+            "attribution": _attribution(nuc, first["source"], thread_verified),
         })
     out.sort(key=lambda t: -t["updated_at"])
     return out
@@ -100,7 +127,8 @@ def load_threads(estado: str = "abiertos", horas: int = 24,
                      " AND posted_at >= :cut)")
         params["cut"] = cut
     sql = ("SELECT id, source, channel, posted_at, text, nucleo_code, lines,"
-           " stations, kind, status, is_update, thread_id"
+           " stations, kind, status, is_update, thread_id, verified,"
+           " source_url, parse"
            " FROM official_notice WHERE " + " AND ".join(where)
            + " ORDER BY posted_at, id")
     with engine.connect() as c:
@@ -113,10 +141,13 @@ def load_threads(estado: str = "abiertos", horas: int = 24,
 
 
 def threads_for_filters(nucleo: str | None = None, linea: str | None = None,
-                        estacion: str | None = None, horas: int = 24) -> list[dict]:
-    """Hilos abiertos para las vistas de /incidencias (nucleo, linea, estacion)."""
+                        estacion: str | None = None, horas: int = 24,
+                        estado: str = "abiertos") -> list[dict]:
+    """Hilos de avisos para las vistas de /incidencias.
+
+    estado: 'abiertos' (situación abierta con novedad en `horas`) o 'todos'."""
     code = NUCLEO_BY_SLUG.get(nucleo or "") if nucleo else None
-    threads = load_threads("abiertos", horas, code)
+    threads = load_threads(estado, horas, code)
     if estacion:
         sids = {p.split(":", 1)[1] for p in estacion.split(",")
                 if p.startswith("cer:")}
@@ -149,6 +180,67 @@ def avisos_oficiales(nucleo: str | None = None, linea: str | None = None,
             "nucleo": nucleo, "linea": linea, "items": threads}
 
 
+# ---------- salud de la fuente WhatsApp/WAHA ----------
+
+def _meta_int(v):
+    try:
+        return int(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def whatsapp_health(now: int | None = None) -> dict:
+    """Estado de la captura WAHA según meta: sesión, última descarga por
+    canal, último mensaje de contenido y contadores acumulados.
+
+    status: disabled (sin meta WAHA) | ok | stale | down | degraded.
+    'ok' exige descarga reciente y sin degradación registrada."""
+    now = int(now or time.time())
+    with engine.connect() as c:
+        m = dict(c.execute(text(
+            "SELECT key, value FROM meta WHERE key LIKE 'whatsapp%'")).all())
+    if not m:
+        return {"status": "disabled"}
+    sess = m.get("whatsapp_session_status")
+    channels: dict = {}
+    for k, v in m.items():
+        for pre, field in (("whatsapp_fetch_ok_", "fetch_ok"),
+                           ("whatsapp_fetch_err_", "fetch_err"),
+                           ("whatsapp_degraded_", "degraded"),
+                           ("whatsapp_last_msg_", "last_msg")):
+            if k.startswith(pre) and not k.startswith("whatsapp_fetch_errmsg_"):
+                slug = k[len(pre):]
+                channels.setdefault(slug, {})[field] = _meta_int(v) if field != "degraded" else v
+        if k.startswith("whatsapp_stats_"):
+            slug = k[len("whatsapp_stats_"):]
+            with contextlib.suppress(TypeError, ValueError):
+                channels.setdefault(slug, {})["stats"] = json.loads(v)
+    # agregado por canal (los slugs sin descargas, p. ej. '_all' de
+    # contadores globales, no influyen en el estado)
+    worst = "ok"
+    real = {s: ch for s, ch in channels.items()
+            if ch.get("fetch_ok") is not None or ch.get("fetch_err") is not None}
+    for ch in real.values():
+        ok, err = ch.get("fetch_ok"), ch.get("fetch_err")
+        if ok is None or (err and err > ok):
+            st = "down"
+        elif now - ok > 600:
+            st = "stale"
+        elif ch.get("degraded"):
+            st = "degraded"
+        else:
+            st = "ok"
+        ch["status"] = st
+        order = {"down": 3, "degraded": 2, "stale": 1, "ok": 0}
+        if order[st] > order[worst]:
+            worst = st
+    if sess and sess != "WORKING" and worst == "ok":
+        worst = "degraded"
+    if not real and not sess:
+        return {"status": "disabled"}
+    return {"status": worst, "session": sess, "channels": channels}
+
+
 # ---------- alta manual (administrador) ----------
 
 class AvisoIn(BaseModel):
@@ -156,6 +248,8 @@ class AvisoIn(BaseModel):
     channel: str = Field(DEFAULT_CHANNEL, min_length=1, max_length=64)
     nucleo: str = "madrid"
     posted_at: int | str | None = None
+    # dónde se vio el aviso (p. ej. enlace al canal oficial): trazabilidad
+    source_url: str | None = Field(None, max_length=500)
 
 
 def _check_admin(authorization: str | None) -> None:
@@ -200,19 +294,71 @@ def admin_aviso(body: AvisoIn, authorization: str | None = Header(None)):
     posted = _parse_posted(body.posted_at)
     ext = hashlib.sha256(f"{txt}{posted}".encode()).hexdigest()[:32]
     now = int(time.time())
+    surl = (body.source_url or "").strip() or None
     with engine.begin() as c:
         row = c.execute(text("""
             INSERT INTO official_notice (source, channel, external_id, posted_at,
-                received_at, text, nucleo_code, lines, stations, status, is_update)
+                received_at, text, nucleo_code, lines, stations, status,
+                is_update, verified, source_url)
             VALUES ('manual', :ch, :ext, :p, :r, :t, :n,
-                CAST(:empty AS jsonb), CAST(:empty AS jsonb), 'pendiente', 0)
+                CAST(:empty AS jsonb), CAST(:empty AS jsonb), 'pendiente', 0,
+                FALSE, :surl)
             ON CONFLICT (source, channel, external_id) DO NOTHING
             RETURNING id, status"""),
             {"ch": body.channel, "ext": ext, "p": posted, "r": now, "t": txt,
-             "n": code, "empty": json.dumps([])}).first()
+             "n": code, "empty": json.dumps([]), "surl": surl}).first()
         if row is None:   # ya existía: idempotente
             row = c.execute(text("""SELECT id, status FROM official_notice
                 WHERE source='manual' AND channel=:ch AND external_id=:ext"""),
                 {"ch": body.channel, "ext": ext}).first()
-    return {"id": row[0], "status": row[1],
-            "note": "el collector lo interpretará en ≤1 min"}
+    return {"id": row[0], "status": row[1], "verified": False,
+            "note": "el collector lo interpretará en ≤1 min; queda pendiente "
+                    "de verificación hasta que un administrador la confirme"}
+
+
+class VerificarIn(BaseModel):
+    """Confirmación de que el aviso manual procede realmente del canal
+    oficial (el operador lo contrastó contra la fuente)."""
+    source_url: str | None = Field(None, max_length=500)
+
+
+@router.post("/admin/avisos/{aviso_id}/verificar")
+def admin_verificar(aviso_id: int, body: VerificarIn,
+                    authorization: str | None = Header(None)):
+    """Marca un aviso manual como verificado contra su fuente oficial."""
+    _check_admin(authorization)
+    with engine.begin() as c:
+        row = c.execute(text(
+            "UPDATE official_notice SET verified = TRUE,"
+            " source_url = COALESCE(:s, source_url) WHERE id = :i"
+            " RETURNING id"),
+            {"i": aviso_id, "s": (body.source_url or "").strip() or None}).first()
+    if row is None:
+        raise HTTPException(404, "aviso no encontrado")
+    log.info("admin: aviso %s verificado", aviso_id)
+    return {"id": row[0], "verified": True}
+
+
+class HiloIn(BaseModel):
+    thread_id: int = Field(gt=0)
+
+
+@router.post("/admin/avisos/{aviso_id}/hilo")
+def admin_reasignar_hilo(aviso_id: int, body: HiloIn,
+                         authorization: str | None = Header(None)):
+    """Corrige la asociación de un aviso (p. ej. uno marcado ambiguo)."""
+    _check_admin(authorization)
+    with engine.begin() as c:
+        exists = c.execute(text(
+            "SELECT 1 FROM official_notice WHERE COALESCE(thread_id, id) = :t"),
+            {"t": body.thread_id}).first()
+        if not exists:
+            raise HTTPException(404, "hilo no encontrado")
+        row = c.execute(text(
+            "UPDATE official_notice SET thread_id = :t WHERE id = :i"
+            " RETURNING id"),
+            {"t": body.thread_id, "i": aviso_id}).first()
+    if row is None:
+        raise HTTPException(404, "aviso no encontrado")
+    log.info("admin: aviso %s reasignado a hilo %s", aviso_id, body.thread_id)
+    return {"id": row[0], "thread_id": body.thread_id}

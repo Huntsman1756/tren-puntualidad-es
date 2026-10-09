@@ -219,3 +219,26 @@ def test_service_date_prefers_today(scenario, radar_mod, monkeypatch):
             c.execute(text("SELECT identity_src FROM rt_ext_ld WHERE train_number='03100'")).scalar()
             == "coverage_multi"
         )
+
+
+def test_instance_ambiguity_two_trip_ids(scenario, radar_mod, monkeypatch, client):
+    """Un número comercial con dos trip_id el mismo día (servicio con
+    etapas) queda instances=2, y la API lo expone ambiguo y no verificado."""
+    with scenario.begin() as c:
+        c.execute(text(
+            "INSERT INTO trips (feed,trip_id,route_id,service_id,train_number)"
+            " VALUES('ld','LD_03100_B','LD_AVE_MAD_BCN','S_ALL','03100')"))
+    _patch_radar(monkeypatch, radar_mod, _fleet_payload([_train("03100")]))
+    radar_mod.poll_radar()
+    with scenario.connect() as c:
+        inst = c.execute(text(
+            "SELECT instances FROM rt_ext_ld WHERE train_number='03100'")).scalar()
+        assert inst == 2
+        stats = json.loads(c.execute(text(
+            "SELECT value FROM meta WHERE key='radar_stats'")).scalar())
+        assert stats["ambiguous"] == 1
+    # la ficha expone la ambigüedad y no verifica la identidad
+    rt = client.get("/api/v1/trains/ld/LD_03100").json()
+    ext = rt["ext"]
+    assert ext["instances"] == 2 and ext["ambiguous"] is True
+    assert ext["verified"] is False

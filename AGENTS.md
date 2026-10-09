@@ -87,3 +87,10 @@
   flag `stale` (>15 min sin dato del proveedor). Nunca sustituye al dato
   Renfe; si cae, la API sigue igual.
 - NO cubre Ouigo/Iryo (la API pública solo devuelve operador RF).
+
+## Pilotos y scripts
+
+- `scripts/pilot_adif.py`: contraste RadarDeTrenes↔BD local (lee solo). `DATABASE_URL` por env.
+- `scripts/probe_adif_signalr.py` / `e2e/probe_adif_ws.mjs`: sonda `wss://info.adif.es/InfoStation`
+  (topic `PRO-ECM-{codigo}`). Akamai bloquea IPs de datacenter — probar desde VPS.
+- Informe GO/NO_GO: `docs/research/pilot-adif.md`; diseño transbordos: `docs/decisions/planificador-transbordo.md`.

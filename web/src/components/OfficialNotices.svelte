@@ -1,5 +1,7 @@
 <script>
   // Avisos OFICIALES de Renfe publicados en sus canales (p. ej. WhatsApp), texto original.
+  // Modo normal: tarjeta compacta por hilo, expandible al texto íntegro.
+  // Modo compact: una línea por hilo (portada).
   import { fmtHM, fmtStamp } from '../lib/format';
 
   export let items = [];       // hilos de /api/v1/avisos-oficiales (o incidencias.official_notices)
@@ -18,6 +20,11 @@
     reajuste_servicio: 'Reajuste de servicio',
     otra: 'Incidencia',
   };
+  const EFF = {
+    demoras: 'demoras', detenciones: 'detenciones',
+    recorrido_modificado: 'recorrido modificado', supresiones: 'supresiones',
+    salida_retrasada: 'salida con hora retrasada',
+  };
   const ST = {
     activa: 'Activa', en_recuperacion: 'En recuperación', normalizada: 'Normalizada',
     sin_actualizar: 'Sin actualizar',
@@ -35,6 +42,7 @@
   const nucLabel = (t) => (typeof t.nucleo === 'string' ? t.nucleo
     : [t.nucleo?.brand, t.nucleo?.name].filter(Boolean).join(' '));
   const chanOf = (t) => CH[t.channel] || t.channel || '';
+  const effLbl = (t) => (t.effects || []).map((e) => EFF[e] || e.replace(/_/g, ' ')).join(' · ');
   function headerOf(t) {
     const nl = nucLabel(t);
     const base = t.attribution
@@ -72,21 +80,34 @@
         <p class="meta">
           {#each t.lines || [] as code}<span class="chip">{code}</span>{/each}
           <span class="kind">{kindLbl(t.kind)}</span>
-          <span class="muted">abierto {fmtStamp(t.opened_at)}</span>
+          {#if t.ambiguous}
+            <span class="amb" title="El sistema no pudo determinar a qué hilo pertenece este aviso">asociación pendiente</span>
+          {/if}
+          <span class="muted">abierto {fmtStamp(t.opened_at)} · act. {fmtStamp(t.updated_at)}</span>
         </p>
         {#if statusNote(t)}<p class="note">{statusNote(t)}</p>{/if}
         {#if t.stations?.length}
           <p class="sts">📍 {#each t.stations as s, i}{#if s.key}<a href={`/estacion/${s.key}`}>{s.name}</a>{:else}{s.name}{/if}{i < t.stations.length - 1 ? ', ' : ''}{/each}</p>
         {/if}
-        <ol class="tl" aria-label="Mensajes del aviso">
-          {#each msgs(t) as m (m.id)}
-            <li>
-              <p class="mh"><time>{fmtStamp(m.posted_at)}</time>
-                {#if m.is_update}<span class="upd">📢 actualización</span>{/if}</p>
-              <p class="mtxt">{m.text}</p>
-            </li>
-          {/each}
-        </ol>
+        {#if effLbl(t) || t.salida_hora}
+          <p class="eff">Efectos declarados: {effLbl(t)}{#if t.salida_hora} · salida {t.salida_hora}{/if}</p>
+        {/if}
+        <details class="full">
+          <summary>Texto original y actualizaciones ({msgs(t).length})</summary>
+          <ol class="tl" aria-label="Mensajes del aviso">
+            {#each msgs(t) as m (m.id)}
+              <li>
+                <p class="mh"><time>{fmtStamp(m.posted_at)}</time>
+                  {#if m.is_update}<span class="upd">📢 actualización</span>{/if}
+                  {#if m.source === 'manual' && m.verified === false}
+                    <span class="unver">entrada manual sin verificar</span>
+                  {/if}
+                </p>
+                <p class="mtxt">{m.text}</p>
+              </li>
+            {/each}
+          </ol>
+        </details>
       </article>
     {/each}
   </div>
@@ -120,11 +141,16 @@
   .hd { margin: 0; font-size: .8rem; color: var(--muted); font-weight: 600; }
   .meta { display: flex; flex-wrap: wrap; gap: .35rem .6rem; align-items: center; margin: .35rem 0; font-size: .82rem; }
   .chip { font-weight: 700; border: 1px solid var(--border); border-radius: 6px; padding: .05rem .4rem; }
+  .amb { font-size: .72rem; border: 1px dashed var(--warn); color: var(--warn); border-radius: 999px; padding: .05rem .5rem; }
   .note { margin: 0 0 .3rem; font-size: .85rem; color: var(--muted); }
   .sts { margin: .25rem 0; font-size: .85rem; }
+  .eff { margin: .2rem 0 .3rem; font-size: .85rem; font-weight: 600; }
+  .full { margin-top: .3rem; font-size: .85rem; }
+  .full summary { cursor: pointer; color: var(--accent); font-weight: 600; min-height: 32px; }
   .tl { list-style: none; margin: .5rem 0 0; padding: 0 0 0 .8rem; border-left: 3px solid var(--border); }
   .tl li { padding: .2rem 0 .45rem; }
   .mh { margin: 0; font-size: .78rem; color: var(--muted); display: flex; gap: .5rem; flex-wrap: wrap; }
   .upd { color: var(--warn); font-weight: 650; }
+  .unver { color: var(--bad); font-weight: 600; }
   .mtxt { margin: .15rem 0 0; white-space: pre-line; font-size: .92rem; }
 </style>

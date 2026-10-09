@@ -137,10 +137,48 @@ for (const mob of [false, true]) {
     await pg.goto(BASE + '/incidencias', { waitUntil: 'domcontentloaded' });
     await pg.waitForSelector('h2', { timeout: 10000 });
     const heads = await pg.locator('h2').allTextContents();
-    const want = ['Avisos oficiales (canales de Renfe)', 'Avisos del feed oficial GTFS-RT', 'Posibles incidencias inferidas'];
+    // oficiales → inferidas → GTFS-RT (el feed antiguo ya no domina la página)
+    const want = ['Avisos oficiales (canales de Renfe)', 'Posibles incidencias inferidas', 'Avisos del feed oficial GTFS-RT'];
     const idx = want.map((w) => heads.findIndex((h) => h.includes(w)));
     expect(idx.every((i) => i >= 0), `faltan encabezados: ${heads.join(' | ')}`);
     expect(idx[0] < idx[1] && idx[1] < idx[2], `orden incorrecto: ${idx.join(',')}`);
+  });
+
+  await run('incidencias: filtros de estado y fuente', mob, async (pg) => {
+    await pg.goto(BASE + '/incidencias', { waitUntil: 'domcontentloaded' });
+    await pg.waitForSelector('select[name=estado]', { timeout: 10000 });
+    await pg.selectOption('select[name=fuente]', 'gtfs');
+    await Promise.all([pg.waitForURL(/fuente=gtfs/),
+                       pg.getByRole('button', { name: 'Filtrar' }).click()]);
+    // solo la sección GTFS queda visible
+    expect(await pg.locator('h2', { hasText: 'GTFS-RT' }).count() === 1, 'falta sección GTFS');
+    expect(await pg.locator('h2', { hasText: 'canales de Renfe' }).count() === 0,
+           'sección de canales visible con fuente=gtfs');
+    await pg.goto(BASE + '/incidencias?estado=activa', { waitUntil: 'domcontentloaded' });
+    const sel = await pg.locator('select[name=estado]').inputValue();
+    expect(sel === 'activa', `estado no persistido en URL/control: ${sel}`);
+  });
+
+  await run('incidencias: feed congelado se muestra plegado, no como novedad', mob, async (pg) => {
+    await pg.goto(BASE + '/incidencias', { waitUntil: 'domcontentloaded' });
+    await pg.waitForSelector('h2', { timeout: 10000 });
+    const frozen = pg.locator('details.frozen');
+    if (await frozen.count()) {
+      expect(await frozen.count() === 1, `varios bloques .frozen: ${await frozen.count()}`);
+      expect(!(await frozen.first().getAttribute('open')), 'feed antiguo desplegado por defecto');
+      const sum = await frozen.locator('> summary').textContent();
+      expect(/no son novedades de hoy/.test(sum), 'sin aviso de antigüedad: ' + sum);
+    }
+  });
+
+  await run('incidencias: detalles expandibles por teclado', mob, async (pg) => {
+    await pg.goto(BASE + '/incidencias', { waitUntil: 'domcontentloaded' });
+    const sum = pg.locator('details.frozen > summary, .notice details.full > summary').first();
+    if (await sum.count()) {
+      await sum.focus();
+      await pg.keyboard.press('Enter');
+      expect(await pg.locator('details[open]').count() >= 1, 'Enter no abre el detalle');
+    }
   });
 
   await run('incidencias: estado de fuente y filtro por núcleo', mob, async (pg) => {

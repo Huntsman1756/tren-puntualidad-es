@@ -84,6 +84,11 @@ def _migrate(c):
     # catálogo curado de enlaces de transbordo entre estaciones (idempotente;
     # create_all ya ha creado la tabla en este arranque)
     _add_column(c, "rt_ext_ld", "identity_src", "VARCHAR(16)")
+    # nº de trip_id candidatos para (train_number, service_date): >1 = ambiguo
+    _add_column(c, "rt_ext_ld", "instances", "INTEGER")
+    # avisos oficiales: procedencia verificada y URL de origen (manual)
+    _add_column(c, "official_notice", "verified", "BOOLEAN")
+    _add_column(c, "official_notice", "source_url", "TEXT")
     from collector.transfer_links import seed_transfer_links
     seed_transfer_links(c)
 

@@ -275,8 +275,13 @@ def _resolve_station(conn, nucleo: str | None, name: str, cache: dict) -> str | 
     return next(iter(cands)) if len(cands) == 1 else None
 
 
-def _open_threads(conn, channel: str, posted_at: int, exclude_id: int) -> list:
-    """Hilos del canal con último aviso dentro de NOTICE_THREAD_SEC."""
+def _recent_threads(conn, channel: str, posted_at: int, exclude_id: int) -> list:
+    """Hilos del canal con avisos dentro de NOTICE_THREAD_SEC, abiertos o no.
+
+    Se incluyen los cerrados porque un aviso capturado TARDE (posted_at
+    anterior al último del hilo) pertenece a ese hilo: no debe abrir una
+    incidencia paralela que parezca vigente. Cada hilo lleva el estado y
+    la fecha de su mensaje más reciente."""
     rows = conn.execute(sql_text("""
         SELECT id, thread_id, posted_at, status, kind, lines, stations
         FROM official_notice
@@ -291,28 +296,45 @@ def _open_threads(conn, channel: str, posted_at: int, exclude_id: int) -> list:
         if t is None:  # primera fila = aviso más reciente del hilo
             t = threads[r["thread_id"]] = {
                 "thread_id": r["thread_id"], "status": r["status"],
-                "kind": r["kind"], "lines": set(), "stations": set()}
+                "kind": r["kind"], "newest_posted": r["posted_at"],
+                "lines": set(), "stations": set()}
         t["lines"].update(r["lines"] or [])
         t["stations"].update(_norm_name(s.get("name", "")) for s in (r["stations"] or []))
     # sin_actualizar sigue siendo hilo abierto: una novedad tardía se une
-    return [t for t in threads.values()
-            if t["status"] in ("activa", "en_recuperacion", "sin_actualizar")]
+    open_st = ("activa", "en_recuperacion", "sin_actualizar")
+    for t in threads.values():
+        t["open"] = t["status"] in open_st
+    return list(threads.values())
 
 
-def _find_thread(open_threads: list, lines: list, station_names: list,
-                 kind: str) -> int | None:
-    """Hilo al que unir el aviso: comparte línea y estación con problema
-    (o, sin estación, el mismo tipo). Nunca cierra ni toca otras líneas."""
+def _find_thread(threads: list, lines: list, station_names: list,
+                 kind: str, posted_at: int) -> tuple[int | None, bool]:
+    """(thread_id, ambiguo) del hilo al que unir el aviso.
+
+    Reglas: comparte línea y estación con problema (o, sin estación, el
+    mismo tipo). Un aviso tardío se une aunque el hilo ya esté cerrado
+    (posted_at <= último del hilo); si es posterior al cierre es una
+    incidencia nueva. Más de un candidato = ambiguo: no se adivina."""
     wanted_st = {_norm_name(n) for n in station_names}
-    for t in open_threads:  # ya ordenados del más reciente al más antiguo
+    open_c, closed_c = [], []
+    for t in threads:
         if not set(lines) & t["lines"]:
             continue
         if wanted_st:
-            if wanted_st & t["stations"]:
-                return t["thread_id"]
-        elif kind != "otra" and t["kind"] == kind:
-            return t["thread_id"]
-    return None
+            if not wanted_st & t["stations"]:
+                continue
+        elif kind == "otra" or t["kind"] != kind:
+            continue
+        (open_c if t["open"] else closed_c).append(t)
+    if len(open_c) == 1:
+        return open_c[0]["thread_id"], False
+    if len(open_c) > 1:
+        return None, True
+    if len(closed_c) == 1 and posted_at <= closed_c[0]["newest_posted"]:
+        return closed_c[0]["thread_id"], False
+    if len(closed_c) > 1:
+        return None, True
+    return None, False
 
 
 def _mark_stale(conn, now: int) -> int:
@@ -338,29 +360,38 @@ def process_pending(conn, now: int) -> dict:
         WHERE status = 'pendiente' OR parse IS NULL
         ORDER BY posted_at, id""")).mappings().all()
     cache: dict = {}
-    stats = {"processed": 0, "attached": 0, "new_threads": 0, "stale": 0}
+    stats = {"processed": 0, "attached": 0, "new_threads": 0, "stale": 0,
+             "ambiguous": 0, "unclassified": 0}
     for r in rows:
         p = parse_notice(r["text"], r["nucleo_code"])
         stations = []
         for name in p["stations"]:
             sid = _resolve_station(conn, r["nucleo_code"], name, cache)
             stations.append({"name": name, "stop_id": sid})
-        # hilo: se busca entre los abiertos del mismo canal
-        tid = _find_thread(_open_threads(conn, r["channel"], r["posted_at"], r["id"]),
-                           p["lines"], p["stations"], p["kind"])
+        # hilo: se busca entre los recientes del canal (abiertos o no)
+        tid, ambiguous = _find_thread(
+            _recent_threads(conn, r["channel"], r["posted_at"], r["id"]),
+            p["lines"], p["stations"], p["kind"], r["posted_at"])
+        if ambiguous:
+            p["ambiguous"] = True
         conn.execute(sql_text("""
             UPDATE official_notice SET
                 lines = CAST(:lines AS JSONB), stations = CAST(:st AS JSONB),
                 kind = :kind, status = :status, is_update = :upd,
                 parse = CAST(:parse AS JSONB),
-                thread_id = COALESCE(CAST(:tid AS BIGINT), id)
+                thread_id = CASE WHEN :amb THEN NULL
+                                 ELSE COALESCE(CAST(:tid AS BIGINT), id) END
             WHERE id = :id"""),
-            {"id": r["id"], "tid": tid, "lines": _json(p["lines"]),
+            {"id": r["id"], "tid": tid, "amb": ambiguous,
+             "lines": _json(p["lines"]),
              "st": _json(stations), "kind": p["kind"], "status": p["status"],
              "upd": 1 if p["is_update"] else 0,
              "parse": _json(p)})
         stats["processed"] += 1
         stats["attached" if tid else "new_threads"] += 1
+        stats["ambiguous"] += 1 if ambiguous else 0
+        if p["kind"] == "otra" and not p["lines"] and not p["stations"]:
+            stats["unclassified"] += 1
     stats["stale"] = _mark_stale(conn, now)
     return stats
 
@@ -385,51 +416,122 @@ def _parse_channels(spec: str) -> list:
     return out
 
 
-def _messages(payload) -> list:
-    """Lista de mensajes de la respuesta de WAHA (lista o dict con 'messages'/'data')."""
+def _messages(payload):
+    """(items, error) de la respuesta de WAHA.
+
+    items=None y error='estructura_desconocida' si la forma no es la
+    documentada: lista plana o dict con 'messages'/'data' lista. Una lista
+    vacía es una respuesta válida (sin mensajes en la ventana), no un error."""
+    if isinstance(payload, list):
+        return payload, None
     if isinstance(payload, dict):
-        payload = payload.get("messages") or payload.get("data") or []
-    if not isinstance(payload, list):
-        return []
-    return [m for m in payload if isinstance(m, dict)]
+        for k in ("messages", "data"):
+            if isinstance(payload.get(k), list):
+                return payload[k], None
+    return None, "estructura_desconocida"
 
 
-def _msg_fields(m: dict):
-    """(external_id, posted_at epoch s, texto) o None si no es utilizable."""
+def _msg_fields(m):
+    """(external_id, posted_at epoch s, body, descarte).
+
+    Acepta el envoltorio documentado de vista previa de WAHA
+    ({reactions, viewCount, message: {...}}) y el mensaje plano que usa
+    /chats/{id}/messages o el evento 'message' ({id, timestamp, body}).
+    descarte != None explica por qué no se ingiere: no_objeto,
+    envoltorio_invalido, sin_id, sin_texto (multimedia sin pie) o
+    sin_timestamp."""
+    if not isinstance(m, dict):
+        return None, None, None, "no_objeto"
+    inner = m.get("message")
+    if inner is not None:
+        if not isinstance(inner, dict):
+            return None, None, None, "envoltorio_invalido"
+        m = inner
     key = m.get("key") if isinstance(m.get("key"), dict) else {}
     mid = m.get("id") or key.get("id")
     if isinstance(mid, dict):
         mid = mid.get("_serialized") or mid.get("id")
+    if not mid:
+        return None, None, None, "sin_id"
     body = m.get("body")
     if body is None:
         body = m.get("text")
+    if body is None or not str(body).strip():
+        return None, None, None, "sin_texto"
     ts = m.get("timestamp")
     if ts is None:
         ts = m.get("t")
     try:
         ts = int(float(ts))
     except (TypeError, ValueError):
-        return None
+        return None, None, None, "sin_timestamp"
     if ts > 10**11:  # milisegundos
         ts //= 1000
-    if not mid or not body:
-        return None
-    return str(mid), ts, str(body)
+    return str(mid), ts, str(body), None
 
 
 def _fetch_channel(cli: httpx.Client, invite: str):
     url = (f"{cfg.WAHA_URL}/api/{quote(cfg.WAHA_SESSION, safe='')}"
            f"/channels/{quote(invite, safe='')}/messages/preview")
     headers = {"X-Api-Key": cfg.WAHA_API_KEY} if cfg.WAHA_API_KEY else {}
-    r = cli.get(url, params={"downloadMedia": "false", "limit": 50}, headers=headers)
+    r = cli.get(url, params={"downloadMedia": "false", "limit": 100}, headers=headers)
     r.raise_for_status()
     return r.json()
+
+
+def _fetch_session_status(cli: httpx.Client) -> str:
+    """Estado de la sesión WAHA ('WORKING', …); 'error' si no se puede saber."""
+    headers = {"X-Api-Key": cfg.WAHA_API_KEY} if cfg.WAHA_API_KEY else {}
+    try:
+        r = cli.get(f"{cfg.WAHA_URL}/api/sessions/{quote(cfg.WAHA_SESSION, safe='')}",
+                    headers=headers)
+        r.raise_for_status()
+        data = r.json()
+        st = data.get("status") if isinstance(data, dict) else None
+        return str(st) if st else "desconocido"
+    except (httpx.HTTPError, ValueError):
+        return "error"
+
+
+_last_poll = 0.0  # monotonic; 0 = nunca
+
+
+def _stats_key(slug: str) -> str:
+    return f"whatsapp_stats_{slug}"
+
+
+def _merge_stats(conn, slug: str, add: dict) -> dict:
+    """Acumula contadores del canal en meta (JSON). Devuelve el total."""
+    import json as _j
+
+    from collector import db
+    prev = {}
+    raw = db.get_meta(conn, _stats_key(slug))
+    if raw:
+        try:
+            prev = _j.loads(raw)
+        except ValueError:
+            prev = {}
+    out = dict(prev)
+    for k, v in add.items():
+        if isinstance(v, dict):
+            out[k] = {kk: int((out.get(k) or {}).get(kk, 0)) + int(vv)
+                      for kk, vv in v.items()}
+        elif isinstance(v, (int, float)):
+            out[k] = int(out.get(k, 0)) + int(v)
+        else:
+            out[k] = v
+    db.set_meta(conn, _stats_key(slug), _j.dumps(out, ensure_ascii=False))
+    return out
 
 
 def run_whatsapp_cycle() -> int:
     """Sondea los canales WAHA, inserta mensajes nuevos y los procesa.
 
-    Devuelve nº de avisos nuevos. Sin WAHA_URL no hace nada (0)."""
+    Devuelve nº de avisos nuevos. Sin WAHA_URL no hace nada (0). Respeta
+    POLL_WAHA entre sondeos (el loop del collector llama cada 60 s).
+    Nunca lanza: cada problema queda en meta como degradación de ESTA
+    fuente, no del sistema."""
     from collector import db  # engine compartido con el collector
 
     if not cfg.WAHA_URL:
@@ -437,38 +539,88 @@ def run_whatsapp_cycle() -> int:
     channels = _parse_channels(cfg.WAHA_CHANNELS)
     if not channels:
         return 0
+    global _last_poll
+    if cfg.POLL_WAHA > 0 and _last_poll and (time.monotonic() - _last_poll) < cfg.POLL_WAHA:
+        return 0
+    _last_poll = time.monotonic()
     now = int(time.time())
-    fetched, errors = {}, {}
+    fetched: dict = {}
+    errors: dict = {}
+    degraded: dict = {}
+    session_status = "error"
     with httpx.Client(timeout=20) as cli:
+        session_status = _fetch_session_status(cli)
         for invite, slug, nucleo in channels:
             try:
-                fetched[(slug, nucleo)] = _messages(_fetch_channel(cli, invite))
+                payload = _fetch_channel(cli, invite)
+                msgs, err = _messages(payload)
+                if err:
+                    degraded[slug] = err
+                    log.warning("WAHA %s: respuesta con estructura no reconocida", slug)
+                    continue
+                fetched[(slug, nucleo)] = msgs
             except (httpx.HTTPError, ValueError) as e:
                 log.warning("WAHA %s: fallo al leer canal (%s)", slug, e)
-                errors[slug] = True
+                errors[slug] = str(e)[:120]
 
     inserted = 0
     with db.engine.begin() as conn:
-        for slug in errors:
+        db.set_meta(conn, "whatsapp_session_status", session_status)
+        if session_status != "WORKING":
+            db.set_meta(conn, "whatsapp_session_degraded", now)
+            log.warning("WAHA: sesión %s (estado %s)", cfg.WAHA_SESSION, session_status)
+        for slug, err in errors.items():
             db.set_meta(conn, f"whatsapp_fetch_err_{slug}", now)
+            db.set_meta(conn, f"whatsapp_fetch_errmsg_{slug}", err)
+            _merge_stats(conn, slug, {"fetch_errors": 1})
+        for slug, reason in degraded.items():
+            db.set_meta(conn, f"whatsapp_fetch_ok_{slug}", now)
+            db.set_meta(conn, f"whatsapp_degraded_{slug}", reason)
+            _merge_stats(conn, slug, {"degraded": 1})
         for (slug, nucleo), msgs in fetched.items():
             db.set_meta(conn, f"whatsapp_fetch_ok_{slug}", now)
+            prev_newest = db.get_meta(conn, f"whatsapp_last_msg_{slug}")
+            prev_newest = int(prev_newest) if prev_newest else 0
+            stats = {"received": len(msgs), "discarded": {}}
+            newest, late = prev_newest, 0
             for m in msgs:
-                f = _msg_fields(m)
-                if f is None:
+                ext, posted, body, why = _msg_fields(m)
+                if why:
+                    stats["discarded"][why] = stats["discarded"].get(why, 0) + 1
                     continue
-                ext, posted, body = f
                 row = conn.execute(sql_text("""
                     INSERT INTO official_notice (source, channel, external_id,
-                        posted_at, received_at, text, nucleo_code, status, is_update)
+                        posted_at, received_at, text, nucleo_code, status,
+                        is_update, verified)
                     VALUES ('whatsapp', :ch, :ext, :posted, :recv, :text, :nuc,
-                            'pendiente', 0)
+                            'pendiente', 0, TRUE)
                     ON CONFLICT (source, channel, external_id) DO NOTHING
                     RETURNING id"""),
                     {"ch": slug, "ext": ext, "posted": posted, "recv": now,
                      "text": body, "nuc": nucleo}).first()
-                if row is not None:
-                    inserted += 1
-        process_pending(conn, now)
+                newest = max(newest, posted)
+                if row is None:
+                    stats["duplicated"] = stats.get("duplicated", 0) + 1
+                    continue
+                inserted += 1
+                stats["inserted"] = stats.get("inserted", 0) + 1
+                stats["latency_max"] = max(stats.get("latency_max", 0), now - posted)
+                if posted < prev_newest:
+                    late += 1
+            if late:
+                stats["late"] = late
+            if newest:
+                db.set_meta(conn, f"whatsapp_last_msg_{slug}", newest)
+            # HTTP correcto pero nada interpretable = degradación, no captura sana
+            usable = stats.get("inserted", 0) + stats.get("duplicated", 0)
+            if stats["received"] and not usable:
+                db.set_meta(conn, f"whatsapp_degraded_{slug}", "sin_mensajes_interpretables")
+                stats["degraded"] = 1
+                log.warning("WAHA %s: %d mensajes recibidos, ninguno interpretable",
+                            slug, stats["received"])
+            _merge_stats(conn, slug, stats)
+        res = process_pending(conn, now)
+        if res.get("unclassified"):
+            _merge_stats(conn, "_all", {"unclassified": res["unclassified"]})
     return inserted
 
