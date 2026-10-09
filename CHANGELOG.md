@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.12] — 2026-10-09
+### Planificador — reglas GTFS específicas (corrección)
+- Una regla `transfers.txt` con filtros `from/to_route_id` o
+  `from/to_trip_id` solo habilita el enlace para parejas compatibles:
+  ya no crea conexiones para otras rutas ni eleva el slack de tramos
+  ajenos. Las aristas que solo existen por reglas calificadas exigen
+  aplicabilidad real por pareja (T1,T2).
+- Regresiones: dos T1 compartiendo parada con distinta ruta; mínimo
+  route-scoped no contamina; prohibición acotada por T1.
+### RadarDeTrenes (sigue desactivado)
+- `service_date` ya no es la fecha civil: `launchingDate` si el
+  proveedor la envía; si no, cobertura GTFS en `service_days`
+  (hoy > ayer > mañana). Tests de cruce de medianoche.
+### Diagnóstico RT↔static LD
+- `scripts/diag_ld_rt.py` y `docs/research/rt-ld-reconciliacion.md`:
+  53 % de match exacto por trip_id; el resto son instancias del día
+  anterior retenidas, cobertura regional ausente y servicios fuera de la
+  ventana RT. El match por trip_id es correcto; `unknown` del
+  planificador es ausencia verificable.
+### Rollback
+- Igual que v0.3.11: tag anterior + `transfers=0`.
+
 ## [0.3.11] — 2026-10-09
 ### Planificador con un transbordo — correcciones de corrección
 - Las prohibiciones y mínimos de `transfers.txt` se evalúan SOLO sobre su
