@@ -8,8 +8,9 @@ evaluación no puede divergir de lo que la API haría al publicar.
 
 Requiere las dependencias de api (requirements-dev o api/requirements).
 
-Uso (desde la raíz del repo):
-    DATABASE_URL="postgresql://renfe:***@localhost:5433/renfe" \
+Uso (desde la raíz del repo; el proyecto usa psycopg 3 → esquema
+`postgresql+psycopg://`, no `postgresql://` que cargaría psycopg2):
+    DATABASE_URL="postgresql+psycopg://readonly:***@localhost:5433/renfe" \
         python scripts/stats_gate_check.py
 
 Idealmente con un usuario de solo lectura; además la sesión se fuerza a

@@ -25,6 +25,9 @@ services:
     environment:
       # Motor por defecto GOWS; si falla la lectura de canales, probar WEBJS.
       WHATSAPP_DEFAULT_ENGINE: GOWS
+      # ":?" solo exige que la variable esté definida y no vacía: NO
+      # garantiza entropía. La clave real debe ser aleatoria y larga
+      # (p. ej. `openssl rand -hex 32`) y verificarse antes del arranque.
       WAHA_API_KEY: "${WAHA_API_KEY:?WAHA_API_KEY requerido - genera una clave aleatoria larga antes de levantar el perfil waha}"
       WAHA_DASHBOARD_ENABLED: "false"
       WHATSAPP_RESTART_ALL_SESSIONS: "true"

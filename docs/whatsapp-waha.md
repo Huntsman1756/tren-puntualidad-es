@@ -97,9 +97,12 @@ La API expone este estado en `/api/v1/incidencias` → `sources.whatsapp`
 
 ## Piloto paso a paso (VPS)
 
-1. Definir el token de WAHA en el `.env` del proyecto (mismo valor que se usará en el collector):
+1. Definir el token de WAHA en el `.env` del proyecto (mismo valor que se usará en el collector).
+   El guardián `${WAHA_API_KEY:?}` solo exige que la variable exista y no esté vacía —
+   **no** garantiza entropía: generar una clave real y comprobarla antes de arrancar:
    ```
-   WAHA_API_KEY=<valor largo y aleatorio>
+   openssl rand -hex 32            # o: python -c "import secrets;print(secrets.token_hex(32))"
+   WAHA_API_KEY=<valor generado>
    ```
 2. Levantar solo el servicio WAHA (sin puertos publicados; los deploys normales no lo tocan).
    La imagen va fijada por tag+digest en el compose (`WAHA_IMAGE`, defecto
