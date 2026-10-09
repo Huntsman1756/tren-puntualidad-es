@@ -12,7 +12,7 @@ Uso:
 import os
 import sys
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -54,7 +54,7 @@ def main():
     # paradas de cada viaje estático (para casar por secuencia)
     seq = defaultdict(list)
     tids = [t for t, _, _ in stat]
-    for tid, sid, a in conn.execute(
+    for tid, sid, _arr in conn.execute(
         "SELECT trip_id, stop_id, arr FROM stop_times "
         "WHERE feed='ld' AND trip_id=ANY(%s) ORDER BY trip_id, seq",
         (tids,),

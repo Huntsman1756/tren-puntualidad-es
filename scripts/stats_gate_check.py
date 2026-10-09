@@ -1,133 +1,138 @@
 """Evaluación read-only del gate de estadísticas contra producción.
 
-NO toca `STATS_PUBLIC`: solo informa si los datos de producción pasarían
-las reglas existentes (representatividad diaria + gate descriptivo/
-comparativo). Diseñado para ejecutarse con una conexión de SOLO LECTURA
-(p. ej. usuario `readonly` o sesión con `default_transaction_read_only`).
+NO toca `STATS_PUBLIC`: solo informa si los datos pasarían los gates.
+A diferencia de una réplica en el script, **reutiliza las funciones reales
+de `api.stats`** (`_window`, `_delay_stats`, `_kind_block`,
+`representative_days`, `STATS_GATE`, `_eval_gate`, `_line_units`), así la
+evaluación no puede divergir de lo que la API haría al publicar.
 
-Uso:
-    DATABASE_URL="postgresql://readonly:***@db/renfe" \
+Requiere las dependencias de api (requirements-dev o api/requirements).
+
+Uso (desde la raíz del repo):
+    DATABASE_URL="postgresql://renfe:***@localhost:5433/renfe" \
         python scripts/stats_gate_check.py
 
-Salida: JSON en stdout con, por feed/fuente: días evaluados, elegibles,
-excluidos por motivo, observaciones, cobertura estimada y veredicto del
-gate (descriptive / comparative) según api/stats.py::STATS_GATE.
+Idealmente con un usuario de solo lectura; además la sesión se fuerza a
+read-only vía `options` del DSN. Salida: JSON en stdout.
 """
 
 import collections
-import datetime as dt
 import json
 import os
 import sys
+from pathlib import Path
 
-import psycopg
+from sqlalchemy import create_engine, text
 
-TZ = dt.timezone(dt.timedelta(hours=2))  # Europe/Madrid (aprox.; el gate
-# oficial usa zoneinfo — aquí solo se informa, no se decide publicación)
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "api"))
 
-STATS_GATE = {
-    "descriptive": {"min_instances": 30, "min_days": 2, "min_coverage_pct": 40.0},
-    "comparative": {"min_instances": 100, "min_days": 5, "min_coverage_pct": 70.0,
-                    "min_units": 2},
-}
-CAPTURE_FIRST_MAX_SEC = 4 * 3600
-CAPTURE_LAST_MIN_SEC = 23 * 3600 + 1800
-MAX_GAP_SEC = 1800
-REP_SOURCE = {"reported": "fleet", "prediction": "trip_update"}
+DB_URL = os.environ.get("DATABASE_URL")  # sin default: conexión explícita
+if not DB_URL:
+    sys.exit("DATABASE_URL requerida (apuntar a producción o a su réplica)")
 
-DB_URL = os.environ["DATABASE_URL"]  # sin default: forzar conexión explícita
+os.environ.setdefault("DATABASE_URL", DB_URL)
+os.environ.setdefault("STATS_PUBLIC", "0")
+
+import api.stats as S  # noqa: E402  (importa api.db, que usa DATABASE_URL)
+
+# sesión forzada read-only + redirige el engine del módulo
+S.engine = create_engine(
+    DB_URL, connect_args={"options": "-c default_transaction_read_only=on"})
 
 
 def main():
-    conn = psycopg.connect(DB_URL, autocommit=True)
-    conn.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
-    out = {"generated": dt.datetime.now(dt.UTC).isoformat(),
-           "note": "informativo: replica las reglas de api/stats.py; la "
-                   "publicación real la decide la API con STATS_PUBLIC"}
+    d0, d1, h0, h1, today = S._window(None, None, None, None, 90)
+    out = {
+        "note": "informativo: usa las MISMAS funciones que api/stats.py; "
+                "la publicación real la decide STATS_PUBLIC",
+        "window": {"from": str(d0), "to": str(d1), "today": str(today)},
+        "gate": S.STATS_GATE,
+        "representativity": S.REPRESENTATIVITY,
+    }
 
-    # 1. inicio efectivo de captura por feed/fuente
-    caps = {}
-    for k, v in conn.execute(
-            "SELECT key, value FROM meta WHERE key LIKE 'capture_start_%'"):
-        _, _, feed, source = k.split("_", 3)
-        caps.setdefault(feed, {})[source] = int(v)
-    out["capture_start"] = caps
+    # ---- niveles descriptivos y comparativos (ámbito global, por kind) ----
+    r = S._delay_stats(feed=None, nucleo=None, line=None, ccaa=None,
+                       provincia=None, station=None, frm=None, to=None,
+                       d0=d0, d1=d1, h0=h0, h1=h1, today=today)
+    kinds = {}
+    for k in S.KINDS:
+        blk = S._kind_block(k, r["numer"][k], r["sched_rows"],
+                            r["rep"][k], r["caps"], r["feeds_scope"])
+        kinds[k] = {
+            "source": blk["source"],
+            "capture_since": blk["capture_since"],
+            "with_data_representative": blk["with_data"],
+            "with_data_all": blk["with_data_all"],
+            "scheduled_representative": blk["scheduled_representative"],
+            "representative_days": blk["representative_days"],
+            "excluded_days": blk["excluded_days"],
+            "coverage_pct": blk["coverage_pct"],
+            "days_observed": blk["days_observed"],
+            "gate_descriptive": blk["gate_descriptive"],
+            "gate_comparative": blk["gate_comparative"],
+        }
+    out["kinds"] = kinds
 
-    # 2. días con observaciones por feed
-    obs = conn.execute("""
-        SELECT feed, service_date, count(*)
-        FROM observations WHERE service_date IS NOT NULL
-        GROUP BY 1, 2 ORDER BY 1, 2""").fetchall()
-    by_feed = collections.defaultdict(list)
-    for feed, day, n in obs:
-        by_feed[feed].append((day, n))
+    # ---- gate diario por día: representativo + obs mínimas + cobertura ----
+    daily = collections.defaultdict(dict)
+    for x in r["sched_rows"]:
+        key = (x["feed"], x["day"])
+        daily[key]["feed"] = x["feed"]
+        daily[key]["scheduled"] = x["n"]
+        for k in S.KINDS:
+            rep = r["rep"][k].get(key, {})
+            daily[key].setdefault(k, {})["representative"] = rep.get("ok", False)
+            daily[key][k]["reasons"] = rep.get("reasons", [])
+    for k in S.KINDS:
+        for row in r["numer"][k]:
+            key = (row["feed"], row["service_date"])
+            daily[key][k]["obs"] = daily[key][k].get("obs", 0) + 1
+    out["by_day"] = [{"day": str(d), **v}
+                     for (f, d), v in sorted(daily.items(),
+                                             key=lambda kv: kv[0][1])]
 
-    # 3. días con snapshot de programación (circulation)
-    snap_days = {}
-    try:
-        for feed, day in conn.execute(
-                "SELECT feed, day FROM circulation GROUP BY 1, 2"):
-            snap_days.setdefault(feed, set()).add(day)
-    except Exception as e:
-        out["circulation_error"] = str(e)[:200]
-        snap_days = {}
+    # ---- comparativa: ¿cuántas unidades superan el gate comparativo? ----
+    units_out = []
+    # unidades = líneas de cada núcleo CER + unidades LD (igual que
+    # stats_compare; para cer _line_units requiere nucleo)
+    unit_specs = ([(nuc, u) for nuc in S.NUCLEO_BY_SLUG
+                   for u in S._line_units(nuc, "cer")]
+                  + [(None, u) for u in S._line_units(None, "ld")])
+    for nuc, (val, label) in unit_specs:
+        u = S._delay_stats(feed="ld" if nuc is None else "cer",
+                           nucleo=nuc, line=val, ccaa=None,
+                           provincia=None, station=None, frm=None, to=None,
+                           d0=d0, d1=d1, h0=h0, h1=h1, today=today)
+        b = S._kind_block("reported", u["numer"]["reported"],
+                          u["sched_rows"], u["rep"]["reported"],
+                          u["caps"], u["feeds_scope"])
+        units_out.append({"unit": val, "label": label,
+                          "with_data": b["with_data"],
+                          "coverage_pct": b["coverage_pct"],
+                          "gate_comparative": b["gate_comparative"]["pass"]})
+    eligible = [u for u in units_out if u["gate_comparative"]]
+    g = S.STATS_GATE["comparative"]
+    out["compare"] = {
+        "by": "line",
+        "enabled": len(eligible) >= g["min_units"],
+        "units_checked": len(units_out),
+        "units_passing": len(eligible),
+        "min_units": g["min_units"],
+        "passing_units": [{"unit": u["unit"], "with_data": u["with_data"],
+                           "coverage_pct": u["coverage_pct"]}
+                          for u in eligible],
+    }
 
-    today = dt.datetime.now(TZ).date()
-    for feed, days in by_feed.items():
-        for source in ("reported", "prediction"):
-            if source == "reported" and feed == "ld":
-                continue  # flota solo existe para CER
-            cap = (caps.get(feed) or {}).get(REP_SOURCE[source])
-            eligible, excluded = [], collections.Counter()
-            for day, n in days:
-                if day >= today:
-                    excluded["dia_en_curso"] += 1
-                    continue
-                if cap and dt.datetime.fromtimestamp(cap, TZ).date() > day:
-                    excluded["antes_de_captura"] += 1
-                    continue
-                if cap is None:
-                    excluded["sin_inicio_captura"] += 1
-                    continue
-                if feed in snap_days and day not in snap_days[feed]:
-                    excluded["sin_snapshot"] += 1
-                    continue
-                # salud de captura del día (si existe tabla capture_health)
-                try:
-                    h = conn.execute(
-                        """SELECT polls, first_ts, last_ts, max_gap_sec
-                           FROM capture_health
-                           WHERE feed=%s AND source=%s AND day=%s""",
-                        (feed, REP_SOURCE[source], day)).fetchone()
-                except Exception:
-                    h = None
-                if h is None:
-                    excluded["sin_registro_captura"] += 1
-                    continue
-                _polls, first_ts, last_ts, max_gap = h
-                lo = dt.datetime.combine(day, dt.time(), tzinfo=TZ).timestamp()
-                if first_ts and first_ts - lo > CAPTURE_FIRST_MAX_SEC:
-                    excluded["inicio_tardio"] += 1
-                    continue
-                if last_ts and (lo + 86400) - last_ts > (86400 - CAPTURE_LAST_MIN_SEC):
-                    excluded["fin_temprano"] += 1
-                    continue
-                if max_gap and max_gap > MAX_GAP_SEC:
-                    excluded["hueco_captura"] += 1
-                    continue
-                eligible.append((day, n))
-            n_obs = sum(n for _, n in eligible)
-            verdict = {}
-            for level, g in STATS_GATE.items():
-                verdict[level] = {
-                    "pass": (n_obs >= g["min_instances"]
-                             and len(eligible) >= g["min_days"]),
-                    "instances": n_obs, "days": len(eligible),
-                    "need": g,
-                }
-            out[f"{feed}/{source}"] = {
-                "dias_con_obs": len(days), "elegibles": len(eligible),
-                "excluidos": dict(excluded), "gate": verdict}
+    # ---- sanidad: capture_health existe y tiene filas recientes ----
+    with S.engine.connect() as c:
+        try:
+            n = c.execute(text("SELECT count(*) FROM capture_health")).scalar()
+            latest = c.execute(
+                text("SELECT max(day) FROM capture_health")).scalar()
+            out["capture_health"] = {"rows": n, "latest_day": str(latest)}
+        except Exception as e:
+            out["capture_health"] = {"error": str(e)[:200]}
     print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
 
 

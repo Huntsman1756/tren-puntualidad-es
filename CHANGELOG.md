@@ -1,6 +1,10 @@
 # Changelog
 
 ## [0.3.14] — 2026-10-09
+
+> Producción desplegada desde `c7ddaf4` (= este tag + fix del compose
+> WAHA: `WAHA_API_KEY:?` rompía el parse con perfil off). El servicio
+> `waha` vive ahora en `infra/compose/docker-compose.waha.yml`.
 ### Avisos oficiales / WAHA (experimental, sigue desactivado)
 - El adaptador `_msg_fields` entiende el envoltorio real de
   `messages/preview` (`{reactions, viewCount, message:{id,timestamp,body}}`)

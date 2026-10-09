@@ -110,46 +110,9 @@ services:
       PGDATABASE: ${POSTGRES_DB:-renfe}
     command: ["sh", "/backup_loop.sh"]
 
-  # EXPERIMENTAL: avisos oficiales de WhatsApp Channels vía WAHA (no oficial).
-  # Solo se levanta con --profile waha (deploy.sh no lo arranca). Usar SIEMPRE
-  # una cuenta de WhatsApp de pruebas, nunca la personal. Ver docs/whatsapp-waha.md.
-  # Sin puertos publicados ni labels de Traefik: el collector llega por http://waha:3000.
-  waha:
-    profiles: ["waha"]
-    # Imagen fijada por tag+digest (verificado en Docker Hub 2026-10-09):
-    # no existe tag plano '2026.9.2'; los tags son por motor
-    # (gows|noweb|chrome|latest). Usamos gows, acorde a WHATSAPP_DEFAULT_ENGINE.
-    image: devlikeapro/waha:${WAHA_IMAGE:-gows-2026.9.2@sha256:1ae3c6a994ee97e5039bf41103193d7bf9175f1a31db73ba89bdeed6277901bc}
-    restart: unless-stopped
-    environment:
-      # Motor por defecto GOWS; si falla la lectura de canales, probar WEBJS.
-      WHATSAPP_DEFAULT_ENGINE: GOWS
-      # Sin WAHA_API_KEY el servicio exige esta clave inexistente: no se puede
-      # usar la API de WAHA sin configurar una clave real (no ":?" porque el
-      # parser de compose la evalúa aunque el perfil no se levante).
-      WAHA_API_KEY: ${WAHA_API_KEY:-waha-perfil-no-configurado}
-      WAHA_DASHBOARD_ENABLED: "false"
-      WHATSAPP_RESTART_ALL_SESSIONS: "true"
-    volumes:
-      - waha_sessions:/app/.sessions
-    networks:
-      - default
-    healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))\""]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: "1.0"
-
 networks:
   coolify:
     external: true
 
 volumes:
   backups:
-  waha_sessions:

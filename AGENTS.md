@@ -51,8 +51,9 @@
   (POST `/api/v1/admin/avisos`; `BASE` por defecto `https://trenes.h1756.es`).
 - Ingesta WAHA (experimental): variables `WAHA_URL`, `WAHA_API_KEY`, `WAHA_SESSION`,
   `WAHA_CHANNELS`, `POLL_WAHA` (ver `.env.example`). Desactivada si `WAHA_URL` está vacío.
-- Servicio `waha` en `infra/compose/docker-compose.prod.yml` con `profiles: ["waha"]`:
-  NO lo arrancan los deploys; solo `--profile waha` explícito.
+- Servicio `waha` aislado en `infra/compose/docker-compose.waha.yml`
+  (profiles ["waha"] + WAHA_API_KEY:?): solo arranca incluyendo ese -f
+  explícitamente; deploy.sh no lo toca.
 - Usar SIEMPRE una cuenta de WhatsApp de pruebas, nunca la personal (integración no oficial,
   riesgo de restricción de la cuenta). Guía completa: `docs/whatsapp-waha.md`.
 

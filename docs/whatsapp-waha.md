@@ -1,7 +1,7 @@
 # Avisos oficiales por WhatsApp Channels (WAHA) — piloto experimental
 
 Estado: **experimental y desactivado por defecto**. Solo se activa si el collector
-tiene `WAHA_URL` definido y se levanta el servicio `waha` con `--profile waha`.
+tiene `WAHA_URL` definido y se levanta el servicio `waha` incluyendo `infra/compose/docker-compose.waha.yml` con `--profile waha`.
 
 ## Propósito
 
@@ -107,7 +107,7 @@ La API expone este estado en `/api/v1/incidencias` → `sources.whatsapp`
    (`gows-|noweb-|chrome-|latest-`); no existe tag plano de versión.
    Para probar otra, exportar `WAHA_IMAGE=<motor>-<versión>` antes:
    ```
-   sudo docker compose -p trenes -f docker-compose.yml -f infra/compose/docker-compose.prod.yml --profile waha up -d waha
+   sudo docker compose -p trenes -f docker-compose.yml -f infra/compose/docker-compose.prod.yml -f infra/compose/docker-compose.waha.yml --profile waha up -d waha
    ```
 3. Arrancar la sesión y obtener el QR. El puerto de WAHA no se publica en el host, así que las
    llamadas se hacen desde la red del proyecto (`trenes_default`) con un contenedor auxiliar:
@@ -160,7 +160,7 @@ La API expone este estado en `/api/v1/incidencias` → `sources.whatsapp`
 1. Quitar `WAHA_URL` del `.env` (la ingesta queda desactivada) y redesplegar el collector.
 2. Parar el servicio WAHA:
    ```
-   sudo docker compose -p trenes -f docker-compose.yml -f infra/compose/docker-compose.prod.yml --profile waha stop waha
+   sudo docker compose -p trenes -f docker-compose.yml -f infra/compose/docker-compose.prod.yml -f infra/compose/docker-compose.waha.yml --profile waha stop waha
    ```
 3. Desvincular el dispositivo desde el teléfono de pruebas: WhatsApp > Dispositivos vinculados > cerrar sesión.
 4. Opcional: borrar el volumen de sesiones (`waha_sessions`) si no se va a reintentar.
