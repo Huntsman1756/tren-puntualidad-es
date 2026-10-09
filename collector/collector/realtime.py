@@ -258,6 +258,23 @@ def _mark_capture(conn, feed: str, source: str, ts: int):
         {"k": f"capture_start_{feed}_{source}", "v": str(ts)})
 
 
+def record_capture(conn, feed: str, source: str, ts: int):
+    """Latido de captura por (feed, fuente, día local): nº de sondeos, primer
+    y último sondeo y mayor hueco entre sondeos consecutivos del mismo día.
+    Un solo upsert; los huecos entre días no cuentan (cada día es su fila)."""
+    day = datetime.fromtimestamp(ts, TZINFO).date()
+    conn.execute(text("""
+        INSERT INTO capture_health(feed,source,day,polls,first_ts,last_ts,max_gap_sec)
+        VALUES(:f,:s,:d,1,:ts,:ts,0)
+        ON CONFLICT(feed,source,day) DO UPDATE SET
+          polls=capture_health.polls+1,
+          max_gap_sec=GREATEST(capture_health.max_gap_sec,
+                               :ts-capture_health.last_ts),
+          first_ts=LEAST(capture_health.first_ts,EXCLUDED.first_ts),
+          last_ts=EXCLUDED.last_ts
+    """), {"f": feed, "s": source, "d": day, "ts": ts})
+
+
 def poll_trip_updates(feed: str, data: dict | None = None,
                       now: int | None = None):
     if data is None:
@@ -267,6 +284,7 @@ def poll_trip_updates(feed: str, data: dict | None = None,
 
     with engine.begin() as conn:
         _mark_capture(conn, feed, "trip_update", now)
+        record_capture(conn, feed, "trip_update", now)
         if trips:
             conn.execute(text("""
                 INSERT INTO rt_trip(feed,trip_id,delay,sched_rel,next_stop_id,next_stop_time,next_stop_delay,updated_at,first_seen)
@@ -399,6 +417,7 @@ def poll_fleet(data: dict | None = None, now: int | None = None):
     now = int(now if now is not None else time.time())
     with engine.begin() as conn:
         _mark_capture(conn, "cer", "fleet", now)
+        record_capture(conn, "cer", "fleet", now)
         conn.execute(text("DELETE FROM rt_fleet"))
         if rows:
             conn.execute(text("""
@@ -458,6 +477,8 @@ def prune_history(days=90):
         conn.execute(text("DELETE FROM circulation WHERE day < :d"),
                      {"d": cut_day})
         conn.execute(text("DELETE FROM sched_capture WHERE day < :d"),
+                     {"d": cut_day})
+        conn.execute(text("DELETE FROM capture_health WHERE day < :d"),
                      {"d": cut_day})
         # Viajes en rt_trip que llevan >12h sin actualizarse: limpieza
         conn.execute(text("DELETE FROM rt_trip WHERE updated_at < :c"),

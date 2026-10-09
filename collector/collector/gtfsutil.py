@@ -60,6 +60,10 @@ def extract_train_number(feed: str, trip_id: str, short_name: str = ""):
     if short_name:
         return short_name
     if feed == "cer":
+        # CER: 4 dígitos + una letra (J, S, V, M...) + nº comercial + código de línea
+        m = re.match(r"^\d{4}[A-Z](\d{4,6})", trip_id)
+        if m:
+            return m.group(1)
         m = re.search(r"J(\d{3,6})", trip_id)
         if m:
             return m.group(1)

@@ -30,6 +30,10 @@
   -e POSTGRES_PASSWORD=renfe -e POSTGRES_DB=renfe_test -p 127.0.0.1:55433:5432
   --tmpfs /var/lib/postgresql/data postgres:16-alpine`). Los tests BORRAN tablas: nunca
   apuntar TEST_DATABASE_URL a una BD con datos.
+- Backup: diario 03:30 (`scripts/backup_loop.sh`, servicio backup); prueba de restauración:
+  `sudo bash scripts/backup_verify.sh` en el VPS (debe imprimir `RESTORE OK`).
+- Estadísticas: `/api/v1/stats/*` solo con `STATS_PUBLIC=1`. Días representativos según
+  `capture_health` + `sched_capture` (ver stats.py `REPRESENTATIVITY`).
 - E2E navegador (escritorio + móvil): `cd e2e && BASE=<url web> node v034.mjs`.
 - Identidad de líneas: `curl localhost:8000/api/v1/lineas-audit` (route_id → núcleo, evidencia).
 - Incidencias: `curl localhost:8000/api/v1/incidencias/audit`.

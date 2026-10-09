@@ -60,8 +60,8 @@ const rtL = status?.feeds?.rt_trip_updates_ld?.ts;
           const d = fmtDelay(r.delay);
           return (
             <a class="rk" href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>
-              <LineBadge line={r.line_info} fallback={r.line || '—'} link={false} />
-              <span class="rknum">{r.train_number || r.trip_id}</span>
+              <LineBadge line={r.line_info} fallback={r.line || '—'} link={false} stack />
+              <span class="rknum">{r.train_number ? r.train_number : <span class="tid" title={r.trip_id}>{r.trip_id}</span>}</span>
               <span class="rkdest">{r.destination || '—'}</span>
               <span class={`badge ${d.cls}`}>
                 {d.text}{r.delay_source === 'observed' ? ' · obs.' : ''}</span>
@@ -92,7 +92,9 @@ const rtL = status?.feeds?.rt_trip_updates_ld?.ts;
   .rk { display: flex; align-items: center; gap: .7rem; padding: .45rem .2rem;
         border-top: 1px solid var(--border); color: var(--text); min-height: 44px; }
   .rk:first-child { border-top: 0; }
-  .rknum { min-width: 4.5rem; font-variant-numeric: tabular-nums; }
+  .rknum { min-width: 4.5rem; max-width: 9rem; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rknum .tid { max-width: 100%; }
+  .rk > :first-child { flex: 0 1 auto; min-width: 0; max-width: 40%; }
   .rkdest { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
             color: var(--muted); }
 </style>

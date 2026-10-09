@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.3.6] — 2026-10-09 — consolidación
+
+### Estadísticas (integradas, aún sin publicar: STATS_PUBLIC)
+- Fusionada la rama de estadísticas (`stats/v0.4.0-local`, 1a0eb95 + ed285d2):
+  `/estadisticas` (explorador + nueva vista por días) sobre la v0.3.5.
+- Identidad canónica `line_route` también en estadísticas y comparativas:
+  núcleo por slug oficial y línea por familia (`c4` = C4+C4a+C4b) o variante.
+- Días representativos: se excluyen de las métricas con gate y de las
+  comparativas el día en curso, días antes/del inicio de captura, snapshots
+  retrospectivos (`late`), días sin horario capturado y días con captura
+  incompleta (`capture_health`: inicio >04:00, fin <23:30 o hueco >30 min).
+  Cada exclusión se publica con su motivo. Predicción y retraso informado
+  siguen separados.
+- `/api/v1/stats/daily`: serie por día con gate diario; las unidades que no
+  superan el gate comparativo nunca devuelven mediana/P90.
+- La web explica la insuficiencia de muestra y muestra «en validación» si la
+  API de estadísticas está desactivada.
+
+### Collector
+- Arranque rápido: con la BD poblada el sondeo RT empieza al instante y la
+  recarga estática, líneas, snapshots y geocodificación van en segundo plano
+  (BD vacía: carga inicial bloqueante, como antes).
+- Corregido bloqueo indefinido tras reinicios: un backend huérfano del
+  contenedor anterior (COPY a medias) bloqueaba el `ALTER TABLE` de arranque.
+  Ahora se terminan conexiones huérfanas propias (`application_name`),
+  keepalives TCP, migraciones sin locks si no hay cambios y `lock_timeout`.
+- `capture_health`: latido diario por feed/fuente (sondeos, primer/último,
+  mayor hueco).
+- Número de tren: los trip_id CER usan cualquier letra (`1080V20414C4b`), no
+  solo `J`; antes la mayoría de trenes salía sin número (se mostraba el
+  trip_id y desbordaba la columna).
+
+### Backup
+- El backup diario no se verificaba (había un volcado de 20 bytes). Nuevo
+  `scripts/backup_loop.sh`: espera a la BD, `pg_dump -Fc` verificado
+  (tamaño, `pg_restore --list`, tablas clave), movimiento atómico, reintentos,
+  03:30 Europe/Madrid sin deriva, rotación (14 diarios, 5 previos a despliegue)
+  y `last-ok`/`backup-status.log`.
+- `scripts/backup_verify.sh`: prueba de restauración real en contenedor
+  desechable con recuentos y comparación con la BD viva.
+
+### API y web
+- Limitador: `X-Forwarded-For` solo se acepta de proxies autorizados
+  (`TRUSTED_PROXIES`); el SSR interno sin XFF queda exento
+  (`INTERNAL_NETWORKS`). Corrige que cualquiera pudiera elegir su clave.
+- `/estado`: la frescura de avisos usa nuestra última descarga (antes mostraba
+  «47 h» porque medía cuándo Renfe editó sus avisos).
+- `/lineas` es ahora un directorio buscable (C1 → todos sus núcleos) y
+  `/nucleos` muestra el estado en vivo de cada núcleo.
+- Distintivos de línea que no desbordan en tablas (núcleo en segunda línea).
+- e2e: enlaces de trayecto con `from`/`to`; nuevas pruebas de directorio,
+  núcleos, desbordes en móvil y estadísticas.
+
 ## [0.3.5] — 2026-10-09
 
 ### Mapa por núcleo (condicionado a datos válidos)

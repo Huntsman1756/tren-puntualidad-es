@@ -38,6 +38,11 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-renfe}:${POSTGRES_PASSWORD:-renfe}@trenes-db:5432/${POSTGRES_DB:-renfe}
       ALLOWED_ORIGINS: "https://${DOMAIN}"
       RATE_LIMIT_PER_MIN: "120"
+      # Traefik (coolify-proxy, red coolify) añade siempre X-Forwarded-For.
+      # El SSR de la web llega SIN XFF por la red coolify (alias trenes-api,
+      # verificado: 10.0.1.12) o la del proyecto: exento del límite.
+      TRUSTED_PROXIES: "10.0.1.0/24,fd2f:970c:9250::/64"
+      INTERNAL_NETWORKS: "10.0.1.0/24,fd2f:970c:9250::/64,10.0.5.0/24,127.0.0.1/32"
     networks:
       default:
         aliases: [trenes-api]
@@ -88,27 +93,22 @@ services:
         limits:
           memory: 1G
 
-  # Backup diario de Postgres vía contenedor con cron ligero.
+  # Backup diario de Postgres (03:30 Madrid). La lógica vive en scripts/backup_loop.sh
+  # (volcado -Fc verificado, reintentos, rotación). Ruta relativa resuelta contra el
+  # directorio del proyecto (raíz del repo, primer -f de deploy.sh).
   backup:
     image: postgres:16-alpine
     restart: unless-stopped
     volumes:
       - backups:/backups
+      - ./scripts/backup_loop.sh:/backup_loop.sh:ro
     environment:
+      TZ: Europe/Madrid
       PGHOST: trenes-db
       PGUSER: ${POSTGRES_USER:-renfe}
       PGPASSWORD: ${POSTGRES_PASSWORD:-renfe}
       PGDATABASE: ${POSTGRES_DB:-renfe}
-    command:
-      - sh
-      - -c
-      - |
-        while true; do
-          TS=$$(date +%Y%m%d-%H%M%S)
-          pg_dump | gzip > /backups/renfe-$$TS.dump.gz
-          ls -t /backups/renfe-*.dump.gz | tail -n +15 | xargs -r rm -f
-          sleep 86400
-        done
+    command: ["sh", "/backup_loop.sh"]
 
 networks:
   coolify:

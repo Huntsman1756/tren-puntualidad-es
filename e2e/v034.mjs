@@ -156,6 +156,40 @@ for (const mob of [false, true]) {
     await pg.waitForSelector('.legend', { timeout: 5000 });
   });
 
+  await run('líneas: buscar C1 lista ≥3 núcleos', mob, async (pg) => {
+    await pg.goto(BASE + '/lineas', { waitUntil: 'domcontentloaded' });
+    await pg.waitForSelector('#linea-q', { timeout: 10000 });
+    await pg.locator('#linea-q').fill('C1');
+    await pg.waitForTimeout(150);
+    const nucs = await pg.locator('section.grp', { has: pg.locator('h2[id="g-C1"]') }).locator('li').count();
+    expect(nucs >= 3, `C1 en ${nucs} núcleos (se esperan ≥3)`);
+  });
+
+  await run('núcleos: resumen en vivo en cada tarjeta', mob, async (pg) => {
+    await pg.goto(BASE + '/nucleos', { waitUntil: 'domcontentloaded' });
+    await pg.waitForSelector('section.nuc', { timeout: 10000 });
+    const cards = await pg.locator('section.nuc').count();
+    const lives = await pg.locator('section.nuc .live').count();
+    expect(cards > 0 && lives === cards, `${lives} de ${cards} tarjetas con resumen en vivo`);
+  });
+
+  if (mob) await run('retrasos móvil: celdas sin desbordar', true, async (pg) => {
+    await pg.goto(BASE + '/retrasos', { waitUntil: 'networkidle' });
+    const bad = await pg.evaluate(() => [...document.querySelectorAll('table.board td')]
+      .filter((td) => td.scrollWidth > td.clientWidth + 2)
+      .map((td) => (td.textContent || '').trim().slice(0, 40)));
+    expect(bad.length === 0, `celdas desbordadas: ${bad.slice(0, 3).join(' | ')}`);
+  });
+
+  await run('estadísticas: sin errores JS; resultados, gate o validación', mob, async (pg) => {
+    await pg.goto(BASE + '/estadisticas', { waitUntil: 'networkidle' });
+    await pg.waitForSelector('.validation, .kindcard, .gate, form.filtros', { timeout: 20000 });
+    const val = await pg.locator('.validation').count();
+    const res = await pg.locator('.kindcard, .gate').count();
+    const form = await pg.locator('form.filtros').count();
+    expect(val + res + form > 0, 'sin resultados, gate ni estado de validación');
+  });
+
   await run('sin scroll horizontal', mob, async (pg) => {
     for (const u of ['/', '/lineas/madrid/c4', '/incidencias', `/trayecto?from=cer:17000&to=cer:18000`, '/retrasos?vista=lineas', '/mapa/madrid']) {
       await pg.goto(BASE + u, { waitUntil: 'domcontentloaded' });

@@ -40,24 +40,54 @@ _rl: dict[str, list[float]] = {}
 RL_LIMIT = int(os.environ.get("RATE_LIMIT_PER_MIN", "120"))
 
 
+def _parse_cidrs(s: str) -> list:
+    """'10.0.1.0/24,127.0.0.1' -> redes. Se parsea una vez al importar."""
+    return [ipaddress.ip_network(p.strip(), strict=False)
+            for p in s.split(",") if p.strip()]
+
+
+# Proxies cuyo X-Forwarded-For aceptamos / redes internas sin XFF (SSR web)
+_TRUSTED = _parse_cidrs(os.environ.get("TRUSTED_PROXIES", "127.0.0.1/32,::1/128"))
+_INTERNAL = _parse_cidrs(os.environ.get("INTERNAL_NETWORKS", "127.0.0.1/32,::1/128"))
+
+
+def _in_nets(ip_s: str, nets: list) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_s)
+    except ValueError:
+        return False
+    return any(ip in n for n in nets)
+
+
+def _is_ip(s: str) -> bool:
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except ValueError:
+        return False
+
+
 def _rl_key(request: Request) -> str | None:
     """Clave del limitador.
 
-    - Detrás de Traefik/Caddy: la IP real es la ÚLTIMA de X-Forwarded-For
-      (la añade nuestro proxy; las anteriores las controla el cliente).
-    - Sin X-Forwarded-For y desde red privada/loopback: es el SSR de la web
-      (una sola IP para todos los usuarios) -> sin límite (None).
+    - XFF solo se respeta si el peer es un proxy de confianza (Traefik):
+      se recorre de derecha a izquierda saltando proxies de confianza; la
+      primera IP que no lo es, es el cliente real.
+    - XFF de un peer no confiable se ignora (no se puede falsificar la clave).
+    - Sin XFF y desde red interna: es el SSR de la web (una sola IP para
+      todos los usuarios) -> sin límite (None).
     """
+    peer = request.client.host if request.client else "?"
     xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip() or "?"
-    host = request.client.host if request.client else "?"
-    try:
-        if ipaddress.ip_address(host).is_private or ipaddress.ip_address(host).is_loopback:
-            return None
-    except ValueError:
-        pass
-    return host
+    if xff and _in_nets(peer, _TRUSTED):
+        for entry in reversed(xff.split(",")):
+            cand = entry.strip()
+            if _is_ip(cand) and not _in_nets(cand, _TRUSTED):
+                return cand
+        return peer
+    if not xff and _in_nets(peer, _INTERNAL):
+        return None
+    return peer
 
 
 @app.middleware("http")
@@ -152,8 +182,11 @@ def _haversine_m(lat1, lon1, lat2, lon2) -> float | None:
 
 
 def _freshness():
+    # alerts_fetch_*: nuestra descarga del feed (rt_alerts_cer solo cambia
+    # cuando Renfe publica avisos nuevos)
     keys = ["rt_trip_updates_cer", "rt_trip_updates_ld", "rt_vehicles_cer",
             "rt_vehicles_ld", "rt_fleet_cer", "rt_alerts_cer",
+            "alerts_fetch_ok_cer", "alerts_fetch_err_cer",
             "static_loaded_cer", "static_loaded_ld"]
     with engine.connect() as c:
         rows = c.execute(text("SELECT key,value FROM meta WHERE key = ANY(:k)"),

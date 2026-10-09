@@ -1,5 +1,68 @@
 ---
-// /lineas comparte vista con /nucleos (listado de líneas agrupadas por núcleo)
-import Index from '../nucleos/index.astro';
+import Base from '../../layouts/Base.astro';
+import LineDirectory from '../../components/LineDirectory.svelte';
+import { api } from '../../lib/api';
+
+// Directorio de líneas de Cercanías/Rodalies agrupado por código (C1, C2… R1…).
+let nucleos: any[] = [];
+let error = false;
+try { nucleos = await api.nucleos(); } catch { error = true; }
+
+const q = Astro.url.searchParams.get('q') || '';
+const norm = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const okColor = (c: string | null | undefined) =>
+  c && /^[0-9A-Fa-f]{6}$/.test(c) && c.toUpperCase() !== 'FFFFFF' ? c : null;
+// orden natural: C1 < C2 < C10 < R1 (prefijo alfabético, luego número, luego sufijo)
+const natKey = (c: string) => {
+  const m = c.match(/^([^\d]*)(\d*)(.*)$/);
+  return { p: m?.[1] ?? c, n: m?.[2] ? Number(m[2]) : -1, s: m?.[3] ?? '' };
+};
+
+const byCode = new Map<string, any[]>();
+for (const n of nucleos) {
+  for (const l of n.lines || []) {
+    const variants = (l.variants || []).filter((v: any) => v.slug !== l.slug).map((v: any) => v.code).join(' · ');
+    const item = {
+      key: `${n.slug}:${l.code}`,
+      code: l.code,
+      nucleo: n.name,
+      brand: n.brand,
+      url: l.url,
+      variants,
+      bus: !!l.bus_only,
+      line: {
+        code: l.code, color: okColor(l.color), url: l.url, label: `${l.code} ${n.name}`,
+        status: 'ok', nucleo: { code: n.code, slug: n.slug, name: n.name, brand: n.brand },
+      },
+      hay: norm(`${l.code} ${n.name} ${n.brand}`),
+    };
+    if (!byCode.has(l.code)) byCode.set(l.code, []);
+    byCode.get(l.code)!.push(item);
+  }
+}
+const groups = [...byCode.entries()]
+  .sort(([a], [b]) => {
+    const ka = natKey(a), kb = natKey(b);
+    return ka.p.localeCompare(kb.p) || ka.n - kb.n || ka.s.localeCompare(kb.s);
+  })
+  .map(([code, items]) => ({
+    code,
+    items: items.sort((x, y) => x.nucleo.localeCompare(y.nucleo, 'es')),
+  }));
+const total = groups.reduce((a, g) => a + g.items.length, 0);
 ---
-<Index />
+<Base title="Líneas de Cercanías y Rodalies — Trenes a tiempo"
+      description="Directorio de líneas de Cercanías y Rodalies por código: busca C1, C4 o R2 y verás en qué núcleos opera cada una.">
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › Líneas</nav>
+  <h1>Líneas de Cercanías y Rodalies</h1>
+  <p class="muted">Directorio por código de línea. La C1 de Madrid y la C1 de Asturias son
+    líneas distintas: cada una aparece con su núcleo. Solo cubre <strong>Cercanías y Rodalies</strong>;
+    las líneas de Alta Velocidad y Larga/Media Distancia no se organizan por núcleos.</p>
+  {error && <div class="card alert" role="alert">No se han podido cargar las líneas. Inténtalo de nuevo en unos segundos.</div>}
+  {!error && <LineDirectory client:load groups={groups} initialQ={q} total={total} />}
+  <p class="muted small">¿Quieres la situación en directo por núcleo? Ve a{' '}
+    <a href="/nucleos">Núcleos</a>.</p>
+</Base>
+<style>
+  .small { font-size: .8rem; }
+</style>

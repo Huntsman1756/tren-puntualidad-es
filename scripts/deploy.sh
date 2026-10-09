@@ -47,6 +47,22 @@ docker exec trenes-db-1 sh -c "zcat $BAK | grep -q 'COPY public.stops'" \
   || { echo "ERROR: backup sin tabla stops — abortando" >&2; exit 1; }
 echo "    backup: $BAK OK ($(docker exec trenes-db-1 du -h "$BAK" | cut -f1))"
 
+# Estado del backup automático diario (no fatal): last-ok lo escribe backup_loop.sh
+# en el volumen compartido /backups. WARN si falta o tiene más de 26 h.
+echo "==> Backup automático (no fatal)"
+LAST_OK=$(docker exec trenes-db-1 sh -c 'cat /backups/last-ok' 2>/dev/null || true)
+case "$LAST_OK" in
+  ''|*[!0-9]*)
+    echo "WARN: /backups/last-ok ausente o ilegible: el backup diario aún no ha corrido OK" ;;
+  *)
+    age_h=$(( ( $(date +%s) - LAST_OK ) / 3600 ))
+    if [ "$age_h" -gt 26 ]; then
+      echo "WARN: último backup automático OK hace ${age_h} h (>26 h)"
+    else
+      echo "    último backup automático OK hace ${age_h} h"
+    fi ;;
+esac
+
 echo "==> Pull + build"
 git -C "$DIR" pull --ff-only
 "${COMPOSE[@]}" build --quiet

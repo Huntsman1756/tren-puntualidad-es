@@ -77,8 +77,8 @@ const where = nuc ? (linea ? ` · ${linea.toUpperCase()} ${nuc.name}` : ` · ${n
               const d = fmtDelay(r.delay);
               return (
                 <tr>
-                  <td><LineBadge line={r.line_info} fallback={r.line} /></td>
-                  <td><a href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>{r.train_number || r.trip_id}</a></td>
+                  <td><LineBadge line={r.line_info} fallback={r.line} stack /></td>
+                  <td><a href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>{r.train_number ? r.train_number : <span class="tid" title={r.trip_id}>{r.trip_id}</span>}</a></td>
                   <td class="hide-sm">{r.destination || '—'}</td>
                   <td>{r.next_stop_name || '—'} <span class="muted">{fmtTime(r.next_stop_time)}</span></td>
                   <td><span class={`badge ${d.cls}`}>{d.text}{r.delay_source === 'observed' ? ' · obs.' : ' · est.'}</span></td>
@@ -127,4 +127,5 @@ const where = nuc ? (linea ? ` · ${linea.toUpperCase()} ${nuc.name}` : ` · ${n
   .filters button { padding: .5rem .9rem; border-radius: 8px; border: 0; background: var(--accent);
                     color: var(--accent-fg); font-weight: 600; cursor: pointer; min-height: 40px; }
   .small { font-size: .76rem; }
+  .tid { display: inline-block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 </style>

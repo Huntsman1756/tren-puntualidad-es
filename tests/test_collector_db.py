@@ -29,7 +29,7 @@ ALL_TABLES = ["observations", "circulation", "circulation_stop",
               "sched_capture", "stop_times", "service_days", "trips",
               "routes", "stops", "rt_trip", "rt_stop_update", "rt_vehicle",
               "rt_fleet", "alerts", "trip_flags", "geo_station",
-              "route_core", "meta"]
+              "route_core", "meta", "capture_health"]
 
 
 def _mid(d: date) -> int:
@@ -413,6 +413,22 @@ def _seed_lines(db, n_trips=35):
     return trips
 
 
+def _clean_day(db, day):
+    """Día cerrado y capturado a tiempo (no retrospectivo, sondeos sanos):
+    requisito de representatividad de las estadísticas (v0.3.6)."""
+    with db.begin() as c:
+        c.execute(text("UPDATE sched_capture SET late=0"
+                       " WHERE feed='cer' AND day=:d"), {"d": day})
+        for src in ("fleet", "trip_update"):
+            c.execute(text(
+                "INSERT INTO capture_health(feed,source,day,polls,first_ts,"
+                " last_ts,max_gap_sec) VALUES('cer',:s,:d,10,:a,:b,600)"
+                " ON CONFLICT (feed,source,day) DO UPDATE SET"
+                " first_ts=EXCLUDED.first_ts, last_ts=EXCLUDED.last_ts,"
+                " max_gap_sec=EXCLUDED.max_gap_sec"),
+                {"s": src, "d": day, "a": _l(day, 3), "b": _l(day, 23, 45)})
+
+
 def _ingest_reported(db, trips, day, delay_min=8):
     """Una obs 'reported' por viaje en S1 del día dado (flota informa en
     la parada actual ~5 min después de la salida programada)."""
@@ -431,17 +447,22 @@ class TestStatsApi:
     def test_stats_gate_and_separation(self, db):
         trips = _seed_lines(db)
         _ingest_reported(db, trips, Y, 8)
+        _clean_day(db, Y)   # tras la ingesta: el sondeo real ajusta la salud
         _ingest_reported(db, trips, TODAY, 10)
         r = _client().get("/api/v1/stats/delays",
                           params={"line": "C9"})
         assert r.status_code == 200
         d = r.json()
         rep = d["kinds"]["reported"]
-        assert rep["with_data"] == 70 and rep["scheduled"] == 70
-        assert rep["coverage_pct"] == 100.0  # 35/35 en el único día cerrado
-        assert rep["days_observed"] == 2
+        # gated: solo el día cerrado y representativo (Y); hoy queda fuera
+        assert rep["with_data"] == 35 and rep["with_data_all"] == 70
+        assert rep["scheduled"] == 70
+        assert rep["coverage_pct"] == 100.0  # 35/35 en el único día válido
+        assert rep["days_observed"] == 1
         assert rep["delay_median_sec"] is not None
-        assert rep["gate_descriptive"]["pass"] is True
+        # un único día representativo no cumple min_days (2)
+        assert rep["gate_descriptive"]["checks"]["min_days"]["pass"] is False
+        assert rep["gate_descriptive"]["pass"] is False
         assert rep["gate_comparative"]["pass"] is False  # faltan días/n
         assert d["kinds"]["prediction"]["with_data"] == 0
         assert d["semantics"]                     # siempre explícita
@@ -463,7 +484,8 @@ class TestStatsApi:
                           params={"station": "cer:S1"}).json()
         rep = d["kinds"]["reported"]
         assert rep["scheduled"] == 10     # 5 viajes x 2 días capturados
-        assert rep["with_data"] == 5      # obs solo de hoy
+        # obs solo de hoy: día en curso, fuera del gated (sí en bruto)
+        assert rep["with_data"] == 0 and rep["with_data_all"] == 5
         assert d["links"]["station"] == "/estacion/cer:S1"
 
     def test_stats_journey_scope(self, db):

@@ -81,7 +81,8 @@ STOP_TIMES = (
 TABLES = ["stops", "routes", "trips", "stop_times", "service_days",
           "trip_flags", "trip_span", "line_route", "station_nucleo",
           "alerts", "alerts_seen", "rt_trip", "rt_stop_update", "rt_fleet",
-          "rt_vehicle", "shapes", "shape_quality", "push_rules", "push_devices", "push_subs", "meta"]
+          "rt_vehicle", "shapes", "shape_quality", "push_rules", "push_devices", "push_subs", "meta",
+          "capture_health"]
 
 
 def service_days(days_all=range(-1, 8), d2=(2,)):

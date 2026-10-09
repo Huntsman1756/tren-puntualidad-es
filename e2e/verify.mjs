@@ -53,9 +53,13 @@ for (const mob of [false, true]) {
     await pg.waitForSelector('.geo-line a[href="/comunidades/madrid"]', { timeout: 8000 });
   });
   await run('trayecto', mob, async (pg) => {
-    await pg.goto(BASE + '/trayecto?o=cer:18000,ld:18000&d=cer:14112,ld:14112',
+    await pg.goto(BASE + '/trayecto?from=cer:18000,ld:18000&to=cer:14112,ld:14112',
       { waitUntil: 'domcontentloaded' });
-    await pg.waitForSelector('body');
+    // el título debe venir de las estaciones reales, no del valor por defecto
+    await pg.waitForSelector('h1', { timeout: 15000 });
+    const h1 = (await pg.locator('h1').first().textContent()) || '';
+    if (!h1.includes('→') || h1.trim() === 'Origen → Destino')
+      throw new Error('título de trayecto por defecto: ' + h1);
   });
   await run('estadísticas: página y filtros', mob, async (pg) => {
     await pg.goto(BASE + '/estadisticas', { waitUntil: 'domcontentloaded' });

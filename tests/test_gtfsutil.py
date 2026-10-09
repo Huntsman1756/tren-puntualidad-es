@@ -1,5 +1,6 @@
 from datetime import date
 
+import pytest
 from collector.gtfsutil import (
     expand_service_days,
     extract_platform,
@@ -50,6 +51,16 @@ class TestTrainNumber:
 
     def test_cer_lowercase_suffix(self):
         assert extract_train_number("cer", "1079J20507C4b") == "20507"
+
+    @pytest.mark.parametrize("trip_id, expected", [
+        ("1080V20414C4b", "20414"),
+        ("3081S23579C1", "23579"),
+        ("6106M35611C1", "35611"),
+        ("1001J19799C1", "19799"),
+        ("4003S24039C2", "24039"),
+    ])
+    def test_cer_any_letter(self, trip_id, expected):
+        assert extract_train_number("cer", trip_id) == expected
 
     def test_ld_date_trip(self):
         assert extract_train_number("ld", "0393212026-10-07") == "03932"

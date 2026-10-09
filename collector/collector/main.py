@@ -4,6 +4,8 @@ import logging
 import time
 from datetime import datetime, timedelta
 
+from sqlalchemy import text
+
 from collector.config import (
     GTFS_STATIC,
     POLL_ALERTS,
@@ -134,42 +136,61 @@ async def maintenance_loop():
             log.exception("maintenance failed")
 
 
-async def main():
-    await asyncio.to_thread(wait_and_create)
-    log.info("collector arrancado")
-    # carga estática inicial en primer plano (la API la necesita)
+def db_populated(conn) -> bool:
+    """True si ya hay paradas de todos los feeds estáticos y ambas cargas
+    registradas en meta: el arranque puede saltarse la espera inicial."""
+    for feed in GTFS_STATIC:
+        if not conn.execute(text("SELECT 1 FROM stops WHERE feed=:f LIMIT 1"),
+                            {"f": feed}).first():
+            return False
+        if not get_meta(conn, f"static_loaded_{feed}"):
+            return False
+    return True
+
+
+def _check_populated() -> bool:
+    with engine.begin() as conn:
+        return db_populated(conn)
+
+
+def _backfill_flags():
+    with engine.begin() as conn:
+        for feed in GTFS_STATIC:
+            if get_meta(conn, f"trip_flags_{feed}"):
+                continue
+            n = conn.execute(text(
+                "SELECT count(*) FROM trips WHERE feed=:f"), {"f": feed}).scalar()
+            if n:
+                k = compute_trip_flags(conn, feed)
+                set_meta(conn, f"trip_flags_{feed}", k)
+                log.info("trip_flags %s: %d viajes clasificados", feed, k)
+
+
+def _backfill_spans():
+    with engine.begin() as conn:
+        for feed in GTFS_STATIC:
+            if not conn.execute(text(
+                    "SELECT 1 FROM trip_span WHERE feed=:f LIMIT 1"),
+                    {"f": feed}).first():
+                log.info("trip_span %s: %d", feed,
+                         compute_trip_spans(conn, feed))
+
+
+async def initial_static_work():
+    """Trabajo pesado de arranque, en el mismo orden en ambas rutas: recarga
+    estática forzada, backfills, líneas, snapshots y conciliación territorial.
+    Cada paso aísla sus errores para que uno no tumbe a los demás."""
     for feed in GTFS_STATIC:
         try:
             await asyncio.to_thread(maybe_reload, feed, True)
         except Exception:
             log.exception("initial static load %s failed", feed)
     # backfill de trip_flags si el estático ya estaba cargado antes de existir
-    def _backfill_flags():
-        from sqlalchemy import text
-        with engine.begin() as conn:
-            for feed in GTFS_STATIC:
-                if get_meta(conn, f"trip_flags_{feed}"):
-                    continue
-                n = conn.execute(text(
-                    "SELECT count(*) FROM trips WHERE feed=:f"), {"f": feed}).scalar()
-                if n:
-                    k = compute_trip_flags(conn, feed)
-                    set_meta(conn, f"trip_flags_{feed}", k)
-                    log.info("trip_flags %s: %d viajes clasificados", feed, k)
     try:
         await asyncio.to_thread(_backfill_flags)
     except Exception:
         log.exception("trip_flags backfill failed")
     # spans de viaje (backfill si el estático se cargó antes de v0.3.4)
-    def _backfill_spans():
-        from sqlalchemy import text
-        with engine.begin() as conn:
-            for feed in GTFS_STATIC:
-                if not conn.execute(text(
-                        "SELECT 1 FROM trip_span WHERE feed=:f LIMIT 1"),
-                        {"f": feed}).first():
-                    log.info("trip_span %s: %d", feed,
-                             compute_trip_spans(conn, feed))
     try:
         await asyncio.to_thread(_backfill_spans)
     except Exception:
@@ -194,10 +215,30 @@ async def main():
         log.info("geo reconcile: %s", st)
     except Exception:
         log.exception("geo reconcile failed")
-    await asyncio.gather(
-        rt_trip_loop(), rt_vehicle_loop(), fleet_loop(), alerts_loop(),
-        static_loop(), maintenance_loop(), push_loop(),
-    )
+
+
+async def main():
+    await asyncio.to_thread(wait_and_create)
+    log.info("collector arrancado")
+    populated = await asyncio.to_thread(_check_populated)
+    rt_loops = (rt_trip_loop(), rt_vehicle_loop(), fleet_loop(),
+                alerts_loop(), push_loop())
+    if populated:
+        # BD ya poblada: el RT no espera a la carga. El trabajo pesado y
+        # static/maintenance (que recargan el GTFS) van en segundo plano,
+        # en serie, para no solapar dos recargas del mismo feed.
+        log.info("arranque: BD poblada -> RT inmediato; init estático en segundo plano")
+
+        async def _init_then_static():
+            await initial_static_work()
+            await asyncio.gather(static_loop(), maintenance_loop())
+
+        await asyncio.gather(_init_then_static(), *rt_loops)
+    else:
+        # BD vacía: la API necesita el estático, carga inicial bloqueante primero
+        log.info("arranque: BD vacía -> carga estática inicial bloqueante antes de RT")
+        await initial_static_work()
+        await asyncio.gather(static_loop(), maintenance_loop(), *rt_loops)
 
 
 if __name__ == "__main__":

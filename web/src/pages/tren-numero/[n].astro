@@ -33,8 +33,8 @@ if (items.length === 1) return Astro.redirect(href(items[0]));
           const d = fmtDelay(t.fleet_delay != null ? t.fleet_delay * 60 : t.delay);
           return (
             <tr>
-              <td><LineBadge line={t.line_info} fallback={t.line} /></td>
-              <td><a href={href(t)}>{t.trip_id}</a></td>
+              <td><LineBadge line={t.line_info} fallback={t.line} stack /></td>
+              <td><a href={href(t)} class="tid" title={t.trip_id}>{t.trip_id}</a></td>
               <td>{day === today
                 ? <span class={`badge ${d.cls}`}>{d.text}</span>
                 : <span class="badge nodata">programado</span>}</td>
@@ -45,3 +45,6 @@ if (items.length === 1) return Astro.redirect(href(items[0]));
     </div>
   )}
 </Base>
+<style>
+  .tid { display: inline-block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+</style>

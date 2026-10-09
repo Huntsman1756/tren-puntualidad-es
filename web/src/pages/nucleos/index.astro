@@ -1,55 +1,104 @@
 ---
 import Base from '../../layouts/Base.astro';
 import { api } from '../../lib/api';
+import { fmtDelay, ageText } from '../../lib/format';
 
+// Núcleos: tarjeta por núcleo con resumen en vivo (una sola consulta agregada).
 let nucleos: any[] = [];
 let error = false;
 try { nucleos = await api.nucleos(); } catch { error = true; }
-const lineas = Astro.url.pathname.startsWith('/lineas');
+
+// 3 min = umbral de «retraso» del resumen. Una sola llamada sin núcleo, agrupada aquí.
+const MIN_DELAY = 180;
+const dl: any = await api.delaysByLine({ min_delay: MIN_DELAY }).catch(() => null);
+const live = new Map<string, { scheduled: number; monitored: number; delayed: number; maxDelay: number | null }>();
+for (const i of dl?.items || []) {
+  const k = i.nucleo?.slug;
+  if (!k) continue;
+  const g = live.get(k) || { scheduled: 0, monitored: 0, delayed: 0, maxDelay: null as number | null };
+  g.scheduled += i.scheduled_now || 0;
+  g.monitored += i.monitored || 0;
+  g.delayed += i.delayed || 0;
+  if (i.max_delay_sec != null) g.maxDelay = Math.max(g.maxDelay ?? -Infinity, i.max_delay_sec);
+  live.set(k, g);
+}
+const liveNote = dl?.generated_at ? `Actualizado ${ageText(dl.generated_at)}.` : '';
 ---
-<Base title={`${lineas ? 'Líneas' : 'Núcleos'} de Cercanías y Rodalies — Trenes a tiempo`}
-      description="Todos los núcleos de Cercanías y Rodalies de Renfe con sus líneas: C1 de Madrid no es la C1 de Asturias.">
-  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › {lineas ? 'Líneas' : 'Núcleos'}</nav>
-  <h1>{lineas ? 'Líneas' : 'Núcleos'} de Cercanías y Rodalies</h1>
-  <p class="muted">Cada línea se identifica por su núcleo: la C1 de Madrid y la C1 de
-    Asturias son líneas distintas. La correspondencia se obtiene del identificador oficial
-    de ruta GTFS y se contrasta con el núcleo que el visor de Renfe asigna a cada estación.</p>
+<Base title="Núcleos de Cercanías y Rodalies — Trenes a tiempo"
+      description="Los núcleos de Cercanías y Rodalies de Renfe con su situación en directo: trenes con retraso, cobertura de datos y avisos oficiales.">
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › Núcleos</nav>
+  <h1>Núcleos de Cercanías y Rodalies</h1>
+  <p class="muted">Cada núcleo, con su resumen en directo. La C1 de Madrid no es la C1 de
+    Asturias: las líneas se identifican por núcleo. Para buscar una línea por código,
+    usa el <a href="/lineas">directorio de líneas</a>.</p>
   {error && <div class="card alert" role="alert">No se han podido cargar los núcleos.</div>}
   <div class="grid">
-    {nucleos.map((n: any) => (
-      <section class="card nuc">
-        <h2><a href={n.url}>{n.brand} {n.name}</a>
-          {n.alerts > 0 && <a class="al" href={`/incidencias?nucleo=${n.slug}`}
-             title="Avisos oficiales publicados">⚠ {n.alerts}</a>}</h2>
-        <div class="lines">
-          {n.lines.map((l: any) => (
-            <a class="ln" href={l.url} title={`${l.code} · ${n.name}`}
-               style={l.color && l.color !== 'FFFFFF' ? `--lc:#${l.color}` : ''}>
-              <span class="code">{l.code}</span>
-              {l.variants.length > 1 && <span class="var">{l.variants.filter((v: any) => v.slug !== l.slug).map((v: any) => v.code).join(' ')}</span>}
-              {l.bus_only && <span class="var">bus</span>}
-            </a>
-          ))}
-        </div>
-      </section>
-    ))}
+    {nucleos.map((n: any) => {
+      const s = live.get(n.slug);
+      const d = s ? fmtDelay(s.maxDelay) : null;
+      return (
+        <section class="card nuc">
+          <h2><a href={n.url}>{n.brand} {n.name}</a>
+            {n.alerts > 0 && <a class="al" href={`/incidencias?nucleo=${n.slug}`}
+               title="Avisos oficiales publicados">⚠ {n.alerts} {n.alerts === 1 ? 'aviso' : 'avisos'}</a>}</h2>
+          <div class="live" data-live={n.slug}>
+            {!dl && <p class="muted small">Datos en directo no disponibles ahora mismo.</p>}
+            {dl && !s && <p class="muted small">Sin trenes con dato en directo en este núcleo ahora mismo.</p>}
+            {dl && s && (
+              <ul class="kpis">
+                <li><b>{s.monitored}</b><span>de {s.scheduled} trenes con dato RT</span></li>
+                <li><b>{s.delayed}</b><span>con retraso ≥{MIN_DELAY / 60} min</span></li>
+                <li><b><span class={`badge ${d?.cls}`}>{s.maxDelay == null ? '—' : d?.text}</span></b>
+                  <span>retraso máximo</span></li>
+              </ul>
+            )}
+          </div>
+          <div class="lines">
+            {n.lines.map((l: any) => (
+              <a class="ln" href={l.url} title={`${l.code} · ${n.name}`}
+                 style={l.color && l.color !== 'FFFFFF' ? `--lc:#${l.color}` : ''}>
+                <span class="code">{l.code}</span>
+                {l.variants.length > 1 && <span class="var">{l.variants.filter((v: any) => v.slug !== l.slug).map((v: any) => v.code).join(' ')}</span>}
+                {l.bus_only && <span class="var">bus</span>}
+              </a>
+            ))}
+          </div>
+          <p class="links">
+            <a href={`/mapa/${n.slug}`}>Mapa</a> ·
+            <a href={`/incidencias?nucleo=${n.slug}`}>Incidencias{n.alerts > 0 ? ` (${n.alerts})` : ''}</a> ·
+            <a href={`/retrasos?nucleo=${n.slug}`}>Retrasos</a>
+          </p>
+        </section>
+      );
+    })}
   </div>
-  <p class="muted small">Auditoría de la correspondencia route_id → núcleo → línea:
+  <p class="muted small">{liveNote} Resumen en directo solo de Cercanías/Rodalies (AV/LD no se organiza por núcleos).
+    Auditoría de la correspondencia route_id → núcleo → línea:
     <a href="/api/v1/lineas-audit">/api/v1/lineas-audit</a>.</p>
 </Base>
 <style>
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .8rem; }
-  .nuc { margin: 0; }
-  .nuc h2 { font-size: 1rem; margin: 0 0 .6rem; display: flex; justify-content: space-between; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: .8rem; }
+  .nuc { margin: 0; min-width: 0; }
+  .nuc h2 { font-size: 1rem; margin: 0 0 .5rem; display: flex; justify-content: space-between;
+            flex-wrap: wrap; gap: .3rem .6rem; }
   .al { font-size: .8rem; color: var(--warn); }
+  .live { margin: 0 0 .6rem; }
+  .kpis { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr);
+          gap: .4rem; }
+  .kpis li { background: var(--card2); border-radius: 8px; padding: .4rem .45rem; font-size: .72rem;
+             color: var(--muted); min-width: 0; }
+  .kpis b { display: block; font-size: 1.05rem; color: var(--text); }
+  .kpis b .badge { font-size: .8rem; }
   .lines { display: flex; flex-wrap: wrap; gap: .4rem; }
   .ln { display: inline-flex; align-items: center; gap: .3rem; color: var(--text);
         border: 1px solid var(--border); border-radius: 8px; padding: .2rem .45rem .2rem .2rem;
-        min-height: 36px; }
+        min-height: 36px; max-width: 100%; }
   .ln:hover { border-color: var(--accent); }
   .code { background: var(--lc, var(--card2)); color: #fff; font-weight: 700; border-radius: 6px;
           padding: .12rem .4rem; font-size: .82rem; min-width: 2.2rem; text-align: center;
           text-shadow: 0 0 2px rgba(0,0,0,.6); }
   .var { font-size: .7rem; color: var(--muted); }
-  .small { font-size: .75rem; margin-top: 1.5rem; }
+  .links { margin: .6rem 0 0; font-size: .84rem; color: var(--muted); }
+  .small { font-size: .75rem; margin-top: 1.2rem; }
+  @media (max-width: 420px) { .kpis { grid-template-columns: 1fr; } }
 </style>

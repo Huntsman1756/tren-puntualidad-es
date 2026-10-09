@@ -1,11 +1,19 @@
 ---
 import Base from '../layouts/Base.astro';
 import StatsExplorer from '../components/StatsExplorer.svelte';
+import StatsDaily from '../components/StatsDaily.svelte';
+import { api } from '../lib/api';
+import { STATS_VALIDATION } from '../lib/stats';
+
+// Si la API de estadísticas no está publicada (404) o falla, se muestra el
+// estado de validación en el propio HTML, sin ninguna llamada que rompa la página.
+const statsOk = await api.statsOptions().then((o: any) => !!o && !o.detail).catch(() => false);
+const vista = Astro.url.searchParams.get('vista') === 'dias' ? 'dias' : 'explorador';
 ---
 <Base title="Estadísticas de retrasos informados — Trenes a tiempo"
       description="Distribuciones de retrasos informados por línea, núcleo, provincia, estación y trayecto. Retrasos notificados por las fuentes RT de Renfe, con criterios estadísticos públicos."
       canonical="/estadisticas">
-  <p><a href="/">← Buscador</a></p>
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › Estadísticas</nav>
   <h1>Estadísticas</h1>
   <p class="muted">Distribución del <strong>retraso informado</strong> por las
     fuentes de tiempo real de Renfe — flota del visor y predicciones GTFS-RT.
@@ -13,5 +21,23 @@ import StatsExplorer from '../components/StatsExplorer.svelte';
     no existe feed oficial de llegada observada. Las métricas descriptivas solo
     se publican cuando la cobertura las hace defendibles
     (<a href="/fuentes">metodología</a>).</p>
-  <StatsExplorer client:load />
+  {statsOk ? (
+    <>
+      {vista === 'dias' && <div id="dias"><StatsDaily client:load /></div>}
+      <StatsExplorer client:load />
+      {vista !== 'dias' && <StatsDaily client:load />}
+    </>
+  ) : (
+    <section class="card validation" role="status">
+      <h2>Estadísticas en validación</h2>
+      <p>{STATS_VALIDATION}</p>
+      <p class="muted small">Mientras tanto, el retraso en directo está en
+        <a href="/retrasos">Retrasos en vivo</a>.</p>
+    </section>
+  )}
 </Base>
+<style>
+  .validation h2 { font-size: 1.05rem; margin: 0 0 .4rem; }
+  .validation p { margin: .3rem 0; }
+  .small { font-size: .8rem; }
+</style>

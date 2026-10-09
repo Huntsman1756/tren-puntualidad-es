@@ -72,8 +72,8 @@ const fam = L.family;
               const d = fmtDelay(t.delay);
               return (
                 <tr>
-                  <td><a href={`/tren/${t.feed}/${encodeURIComponent(t.trip_id)}`}>{t.train_number || t.trip_id}</a>
-                    {t.line_info && t.line_info.code !== L.line.code && <> <LineBadge line={t.line_info} showNucleo={false} /></>}</td>
+                  <td><a href={`/tren/${t.feed}/${encodeURIComponent(t.trip_id)}`}>{t.train_number ? t.train_number : <span class="tid" title={t.trip_id}>{t.trip_id}</span>}</a>
+                    {t.line_info && t.line_info.code !== L.line.code && <><br /><LineBadge line={t.line_info} showNucleo={false} /></>}</td>
                   <td>{t.destination || '—'}</td>
                   <td>{t.next_stop_name || '—'} <span class="muted">{fmtTime(t.next_stop_time)}</span></td>
                   <td>{t.cancelled ? <span class="badge cancel">suprimido</span>
@@ -147,5 +147,6 @@ const fam = L.family;
   .st-al summary { cursor: pointer; font-size: .85rem; margin: .4rem 0; }
   .audit summary { cursor: pointer; font-weight: 600; }
   code { font-size: .8rem; }
+  .tid { display: inline-block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
   @media (max-width: 560px) { .all { columns: 1; } }
 </style>

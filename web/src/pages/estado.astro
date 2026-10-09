@@ -42,22 +42,36 @@ function cls(sec?: number, warn = 120, bad = 900) {
           <thead><tr><th>Fuente</th><th>Última actualización</th><th>Estado</th></tr></thead>
           <tbody>
             {Object.entries(NAMES).map(([k, label]) => {
-              const f = st.feeds[k];
               const isStatic = k.startsWith('static');
-              // alerts solo se regenera cuando cambian los avisos: umbrales laxos
-              const warn = isStatic ? 172800 : k === 'rt_alerts_cer' ? 86400 : 120;
-              const bad = isStatic ? 604800 : k === 'rt_alerts_cer' ? 3 * 86400 : 900;
+              const isAlerts = k === 'rt_alerts_cer';
+              // avisos: frescura = nuestra última descarga OK (no la fecha del contenido de Renfe)
+              const f = isAlerts ? st.feeds.alerts_fetch_ok_cer : st.feeds[k];
+              const e = isAlerts ? st.feeds.alerts_fetch_err_cer : null;
+              const failed = !!e && (!f || e.ts > f.ts);
+              const warn = isStatic ? 172800 : 300;
+              const bad = isStatic ? 604800 : 900;
+              const state = failed ? 'caída'
+                : f ? (f.age_sec <= warn ? 'fresco' : f.age_sec <= bad ? 'atrasado' : 'obsoleto')
+                : 'sin datos';
+              const stateCls = failed ? 'bad' : cls(f?.age_sec, warn, bad);
               return (
                 <tr>
                   <td>{label}</td>
-                  <td>{f ? ago(f.age_sec) + ' ago' : 'sin datos'}</td>
-                  <td><span class={`badge ${cls(f?.age_sec, warn, bad)}`}>
-                    {f ? (f.age_sec <= warn ? 'fresco' : f.age_sec <= bad ? 'atrasado' : 'obsoleto') : 'sin datos'}</span></td>
+                  <td>{f ? 'hace ' + ago(f.age_sec) : 'sin datos'}
+                    {isAlerts && st.feeds.rt_alerts_cer && (
+                      <div class="muted" style="font-size:.85em">
+                        contenido publicado por Renfe hace {ago(st.feeds.rt_alerts_cer.age_sec)}</div>
+                    )}</td>
+                  <td><span class={`badge ${stateCls}`}>{state}</span></td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+        <p class="muted" style="font-size:.85em">Avisos e incidencias: el estado mide
+          cuándo consultamos con éxito la fuente de Renfe. La fecha de su contenido
+          solo cambia cuando Renfe publica o modifica avisos, así que puede ser
+          antigua aunque el dato esté al día.</p>
       </div>
       <div class="card">
         <h2 style="margin-top:0;font-size:1rem">Cobertura</h2>
