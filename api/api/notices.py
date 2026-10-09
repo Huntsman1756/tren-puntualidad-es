@@ -8,6 +8,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import time
@@ -21,6 +22,7 @@ from api.common import NUCLEO_BY_SLUG, TZ, nucleo_public
 from api.db import engine
 
 router = APIRouter(prefix="/api/v1")
+log = logging.getLogger("api.notices")
 
 OPEN_STATUSES = ("activa", "en_recuperacion", "sin_actualizar")
 DEFAULT_CHANNEL = "cercanias-madrid"
@@ -36,10 +38,14 @@ def _thread_key(r) -> int:
     return r["thread_id"] if r["thread_id"] is not None else r["id"]
 
 
-def _attribution(nuc: dict | None, source: str) -> str:
+def _attribution(nuc: dict | None, source: str, verified: bool) -> str:
     name = nuc["name"] if nuc else ""
     base = f"Canal oficial de WhatsApp de Renfe Cercanías {name}".rstrip()
-    return base + (" · pegado manualmente" if source == "manual" else "")
+    if source != "manual":
+        return base
+    # sin verificación administrativa no se afirma la atribución oficial
+    return base + (" · pegado manualmente" if verified
+                   else " · pegado manualmente (pendiente de verificación)")
 
 
 def _build(rows) -> list[dict]:
@@ -62,22 +68,42 @@ def _build(rows) -> list[dict]:
                 ident = k or f"name:{s.get('name')}"
                 stations.setdefault(ident, {"name": s.get("name"),
                                             "stop_id": sid, "key": k})
+        effects = sorted({e for m in msgs
+                          for e in ((m.get("parse") or {}).get("effects") or [])})
+        salida_hora = next(((m.get("parse") or {}).get("salida_hora")
+                            for m in reversed(msgs)
+                            if (m.get("parse") or {}).get("salida_hora")), None)
+        # un aviso capturado del canal allowlist está verificado por la vía
+        # de captura; un pegado manual lo está solo tras verificación admin
+        thread_verified = all(
+            m["verified"] if m["verified"] is not None else m["source"] == "whatsapp"
+            for m in msgs)
         out.append({
             "thread_id": key,
             "channel": first["channel"],
             "source": first["source"],
+            "verified": thread_verified,
             "nucleo": nuc,
             "lines": sorted({ln for m in msgs for ln in (m["lines"] or [])}),
             "stations": list(stations.values()),
             "kind": first["kind"],
+            "effects": effects,
+            "salida_hora": salida_hora,
             "status": last["status"],
             "opened_at": first["posted_at"],
             "updated_at": last["posted_at"],
+            "ambiguous": any((m.get("parse") or {}).get("ambiguous")
+                             for m in msgs),
             "messages": [{"id": m["id"], "posted_at": m["posted_at"],
                           "text": m["text"], "status": m["status"],
-                          "is_update": bool(m["is_update"]), "kind": m["kind"]}
+                          "is_update": bool(m["is_update"]), "kind": m["kind"],
+                          "source": m["source"],
+                          "verified": (m["verified"] if m["verified"] is not None
+                                       else m["source"] == "whatsapp"),
+                          "source_url": m.get("source_url"),
+                          "ambiguous": bool((m.get("parse") or {}).get("ambiguous"))}
                          for m in msgs],
-            "attribution": _attribution(nuc, first["source"]),
+            "attribution": _attribution(nuc, first["source"], thread_verified),
         })
     out.sort(key=lambda t: -t["updated_at"])
     return out
@@ -100,7 +126,8 @@ def load_threads(estado: str = "abiertos", horas: int = 24,
                      " AND posted_at >= :cut)")
         params["cut"] = cut
     sql = ("SELECT id, source, channel, posted_at, text, nucleo_code, lines,"
-           " stations, kind, status, is_update, thread_id"
+           " stations, kind, status, is_update, thread_id, verified,"
+           " source_url, parse"
            " FROM official_notice WHERE " + " AND ".join(where)
            + " ORDER BY posted_at, id")
     with engine.connect() as c:
@@ -156,6 +183,8 @@ class AvisoIn(BaseModel):
     channel: str = Field(DEFAULT_CHANNEL, min_length=1, max_length=64)
     nucleo: str = "madrid"
     posted_at: int | str | None = None
+    # dónde se vio el aviso (p. ej. enlace al canal oficial): trazabilidad
+    source_url: str | None = Field(None, max_length=500)
 
 
 def _check_admin(authorization: str | None) -> None:
@@ -200,19 +229,71 @@ def admin_aviso(body: AvisoIn, authorization: str | None = Header(None)):
     posted = _parse_posted(body.posted_at)
     ext = hashlib.sha256(f"{txt}{posted}".encode()).hexdigest()[:32]
     now = int(time.time())
+    surl = (body.source_url or "").strip() or None
     with engine.begin() as c:
         row = c.execute(text("""
             INSERT INTO official_notice (source, channel, external_id, posted_at,
-                received_at, text, nucleo_code, lines, stations, status, is_update)
+                received_at, text, nucleo_code, lines, stations, status,
+                is_update, verified, source_url)
             VALUES ('manual', :ch, :ext, :p, :r, :t, :n,
-                CAST(:empty AS jsonb), CAST(:empty AS jsonb), 'pendiente', 0)
+                CAST(:empty AS jsonb), CAST(:empty AS jsonb), 'pendiente', 0,
+                FALSE, :surl)
             ON CONFLICT (source, channel, external_id) DO NOTHING
             RETURNING id, status"""),
             {"ch": body.channel, "ext": ext, "p": posted, "r": now, "t": txt,
-             "n": code, "empty": json.dumps([])}).first()
+             "n": code, "empty": json.dumps([]), "surl": surl}).first()
         if row is None:   # ya existía: idempotente
             row = c.execute(text("""SELECT id, status FROM official_notice
                 WHERE source='manual' AND channel=:ch AND external_id=:ext"""),
                 {"ch": body.channel, "ext": ext}).first()
-    return {"id": row[0], "status": row[1],
-            "note": "el collector lo interpretará en ≤1 min"}
+    return {"id": row[0], "status": row[1], "verified": False,
+            "note": "el collector lo interpretará en ≤1 min; queda pendiente "
+                    "de verificación hasta que un administrador la confirme"}
+
+
+class VerificarIn(BaseModel):
+    """Confirmación de que el aviso manual procede realmente del canal
+    oficial (el operador lo contrastó contra la fuente)."""
+    source_url: str | None = Field(None, max_length=500)
+
+
+@router.post("/admin/avisos/{aviso_id}/verificar")
+def admin_verificar(aviso_id: int, body: VerificarIn,
+                    authorization: str | None = Header(None)):
+    """Marca un aviso manual como verificado contra su fuente oficial."""
+    _check_admin(authorization)
+    with engine.begin() as c:
+        row = c.execute(text(
+            "UPDATE official_notice SET verified = TRUE,"
+            " source_url = COALESCE(:s, source_url) WHERE id = :i"
+            " RETURNING id"),
+            {"i": aviso_id, "s": (body.source_url or "").strip() or None}).first()
+    if row is None:
+        raise HTTPException(404, "aviso no encontrado")
+    log.info("admin: aviso %s verificado", aviso_id)
+    return {"id": row[0], "verified": True}
+
+
+class HiloIn(BaseModel):
+    thread_id: int = Field(gt=0)
+
+
+@router.post("/admin/avisos/{aviso_id}/hilo")
+def admin_reasignar_hilo(aviso_id: int, body: HiloIn,
+                         authorization: str | None = Header(None)):
+    """Corrige la asociación de un aviso (p. ej. uno marcado ambiguo)."""
+    _check_admin(authorization)
+    with engine.begin() as c:
+        exists = c.execute(text(
+            "SELECT 1 FROM official_notice WHERE COALESCE(thread_id, id) = :t"),
+            {"t": body.thread_id}).first()
+        if not exists:
+            raise HTTPException(404, "hilo no encontrado")
+        row = c.execute(text(
+            "UPDATE official_notice SET thread_id = :t WHERE id = :i"
+            " RETURNING id"),
+            {"t": body.thread_id, "i": aviso_id}).first()
+    if row is None:
+        raise HTTPException(404, "aviso no encontrado")
+    log.info("admin: aviso %s reasignado a hilo %s", aviso_id, body.thread_id)
+    return {"id": row[0], "thread_id": body.thread_id}
