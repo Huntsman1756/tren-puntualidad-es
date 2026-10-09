@@ -19,7 +19,21 @@ def _migrate(c):
         "ALTER TABLE observations ADD COLUMN IF NOT EXISTS kind VARCHAR(16) DEFAULT 'legacy'",
         "ALTER TABLE observations ADD COLUMN IF NOT EXISTS provider_ts BIGINT",
         "CREATE INDEX IF NOT EXISTS ix_obs_instance ON observations(feed, trip_id, service_date)",
+        "CREATE INDEX IF NOT EXISTS ix_obs_stop_day ON observations(feed, stop_id, service_date)",
+        "ALTER TABLE geo_station ADD COLUMN IF NOT EXISTS nucleo_code VARCHAR(4)",
+        "ALTER TABLE geo_station ADD COLUMN IF NOT EXISTS nucleo VARCHAR(40)",
+        "ALTER TABLE geo_station ADD COLUMN IF NOT EXISTS lineas TEXT",
         "UPDATE observations SET source='legacy', kind='legacy' WHERE source IS NULL",
+        # inicio efectivo de la captura tipificada: para despliegues con
+        # datos v0.3.3 previos, se siembra desde la primera observación
+        # tipificada existente por (feed, fuente)
+        """INSERT INTO meta(key, value)
+           SELECT 'capture_start_' || feed || '_' || source,
+                  min(observed_at)::text
+           FROM observations
+           WHERE kind IN ('prediction','reported')
+           GROUP BY feed, source
+           ON CONFLICT DO NOTHING""",
     ):
         c.execute(text(stmt))
     migrate_push_v2(c)

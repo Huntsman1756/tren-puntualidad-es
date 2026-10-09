@@ -186,6 +186,61 @@ class TripFlag(Base):
 Index("ix_trip_flags_semidirect", TripFlag.feed, TripFlag.semidirect)
 
 
+class SchedCapture(Base):
+    """Un registro por (feed, día de servicio) ya volcado al histórico.
+
+    closed=1: el día ya pasó — inmutable aunque el GTFS se recargue.
+    late=1: la primera captura se hizo después del día (denominadores
+    reconstruidos desde un GTFS posterior, marcado por honestidad).
+    """
+    __tablename__ = "sched_capture"
+    feed = Column(String(8), primary_key=True)
+    day = Column(Date, primary_key=True)
+    captured_at = Column(BigInteger)
+    closed = Column(Integer, default=0)
+    late = Column(Integer, default=0)
+
+
+class Circulation(Base):
+    """Versión mínima de la programación histórica: una circulación
+    programada (feed, trip_id, day) tal como se capturó ese día.
+
+    La recarga del GTFS NO reescribe días cerrados: los denominadores
+    históricos no cambian retrospectivamente."""
+    __tablename__ = "circulation"
+    feed = Column(String(8), primary_key=True)
+    day = Column(Date, primary_key=True)
+    trip_id = Column(String(64), primary_key=True)
+    route_id = Column(String(64))
+    train_number = Column(String(16))
+    first_stop = Column(String(32))
+    last_stop = Column(String(32))
+    dep_secs = Column(Integer)   # primera salida programada (s desde medianoche)
+    arr_secs = Column(Integer)   # última llegada programada
+    n_stops = Column(Integer)
+
+
+Index("ix_circ_day", Circulation.feed, Circulation.day)
+Index("ix_circ_route", Circulation.feed, Circulation.route_id, Circulation.day)
+
+
+class CirculationStop(Base):
+    """Parada programada de una circulación capturada (denominadores por
+    estación/trayecto/franja independientes de recargas del GTFS)."""
+    __tablename__ = "circulation_stop"
+    feed = Column(String(8), primary_key=True)
+    day = Column(Date, primary_key=True)
+    trip_id = Column(String(64), primary_key=True)
+    seq = Column(Integer, primary_key=True)
+    stop_id = Column(String(32))
+    arr = Column(Integer)
+    dep = Column(Integer)
+
+
+Index("ix_cstop_stop", CirculationStop.feed, CirculationStop.stop_id,
+      CirculationStop.day)
+
+
 class GeoStation(Base):
     """Adscripción territorial persistente de cada parada.
 
@@ -206,6 +261,32 @@ class GeoStation(Base):
     matched_code = Column(String(12))  # CÓDIGO del catálogo usado
     dist_m = Column(Float)             # distancia de la inferencia
     active = Column(Integer, default=1)
+    # Núcleo de Cercanías oficial (geojson del visor Renfe, join por
+    # CODIGO_ESTACION). NULL si la estación no consta en esa fuente.
+    nucleo_code = Column(String(4))
+    nucleo = Column(String(40))
+    lineas = Column(Text)              # LINEAS oficiales que paran aquí
+
+
+class RouteCore(Base):
+    """Núcleo de Cercanías verificable de cada ruta GTFS.
+
+    Se deriva del núcleo oficial de las paradas de la ruta (geojson del
+    visor Renfe por CODIGO_ESTACION). Solo se asigna si las paradas
+    clasificadas mayoritan el mismo núcleo; `share`/`matched`/`total`
+    documentan la evidencia."""
+    __tablename__ = "route_core"
+    feed = Column(String(8), primary_key=True)
+    route_id = Column(String(64), primary_key=True)
+    nucleo_code = Column(String(4))
+    nucleo = Column(String(40))        # NULL si no verificable
+    share = Column(Float)              # paradas clasificadas en el núcleo
+    matched = Column(Integer)
+    total = Column(Integer)
+    updated_at = Column(BigInteger)
+
+
+Index("ix_route_core_nucleo", RouteCore.feed, RouteCore.nucleo)
 
 
 class StationNucleo(Base):
