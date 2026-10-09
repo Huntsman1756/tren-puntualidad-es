@@ -32,6 +32,14 @@
   VPS: se descarta sin mecanismos de evasión. Informe en
   `docs/research/pilot-adif.md`; diseño del planificador en
   `docs/decisions/planificador-transbordo.md`.
+### Rollback
+- Código: volver al tag `v0.3.9` (`0fb4eb6`) y redesplegar; el planificador
+  desaparece por completo.
+- Esquema: `gtfs_transfer`, `transfer_link` y `rt_ext_ld` son tablas
+  nuevas e inertes para v0.3.9 — pueden dejarse o borrarse
+  (`DROP TABLE`) tras revertir. `transfers.txt` no altera tablas previas.
+- Función, sin despliegue: `transfers=0` en `/journeys/plan` reproduce la
+  respuesta anterior. `RADAR_ENABLED` vacío deja el adaptador inerte.
 
 ## [0.3.9] — 2026-10-09
 ### Detector de posibles incidencias calibrado
