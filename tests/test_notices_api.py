@@ -220,3 +220,29 @@ def test_admin_reasignar_hilo_corrige_ambiguo(client, notices):
              client.get(THREADS, params={"estado": "todos"}).json()["items"]
              for m in t["messages"]}
     assert items[amb]["thread_id"] == 8001
+
+
+@pytest.mark.integration
+def test_salud_whatsapp_en_incidencias(client, notices):
+    """La respuesta de /incidencias informa de la fuente WhatsApp sin
+    confundirla con la salud del feed GTFS-RT."""
+    eng, now = notices
+    with eng.begin() as c:
+        c.execute(text("DELETE FROM meta WHERE key LIKE 'whatsapp%'"))
+    r = client.get("/api/v1/incidencias").json()
+    assert r["sources"]["whatsapp"]["status"] == "disabled"
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO meta(key, value) VALUES "
+                       "('whatsapp_session_status','WORKING'),"
+                       "('whatsapp_fetch_ok_cercanias-madrid',:ok)"),
+                  {"ok": str(now)})
+    r = client.get("/api/v1/incidencias").json()
+    wa = r["sources"]["whatsapp"]
+    assert wa["status"] == "ok" and wa["session"] == "WORKING"
+    assert wa["channels"]["cercanias-madrid"]["status"] == "ok"
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO meta(key, value) VALUES "
+                       "('whatsapp_session_status','STOPPED') "
+                       "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value"))
+    r = client.get("/api/v1/incidencias").json()
+    assert r["sources"]["whatsapp"]["status"] == "degraded"

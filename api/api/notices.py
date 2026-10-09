@@ -140,10 +140,13 @@ def load_threads(estado: str = "abiertos", horas: int = 24,
 
 
 def threads_for_filters(nucleo: str | None = None, linea: str | None = None,
-                        estacion: str | None = None, horas: int = 24) -> list[dict]:
-    """Hilos abiertos para las vistas de /incidencias (nucleo, linea, estacion)."""
+                        estacion: str | None = None, horas: int = 24,
+                        estado: str = "abiertos") -> list[dict]:
+    """Hilos de avisos para las vistas de /incidencias.
+
+    estado: 'abiertos' (situación abierta con novedad en `horas`) o 'todos'."""
     code = NUCLEO_BY_SLUG.get(nucleo or "") if nucleo else None
-    threads = load_threads("abiertos", horas, code)
+    threads = load_threads(estado, horas, code)
     if estacion:
         sids = {p.split(":", 1)[1] for p in estacion.split(",")
                 if p.startswith("cer:")}
@@ -174,6 +177,71 @@ def avisos_oficiales(nucleo: str | None = None, linea: str | None = None,
         threads = _by_line(threads, linea)
     return {"generated_at": int(time.time()), "estado": estado, "horas": horas,
             "nucleo": nucleo, "linea": linea, "items": threads}
+
+
+# ---------- salud de la fuente WhatsApp/WAHA ----------
+
+def _meta_int(v):
+    try:
+        return int(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def whatsapp_health(now: int | None = None) -> dict:
+    """Estado de la captura WAHA según meta: sesión, última descarga por
+    canal, último mensaje de contenido y contadores acumulados.
+
+    status: disabled (sin meta WAHA) | ok | stale | down | degraded.
+    'ok' exige descarga reciente y sin degradación registrada."""
+    now = int(now or time.time())
+    with engine.connect() as c:
+        m = dict(c.execute(text(
+            "SELECT key, value FROM meta WHERE key LIKE 'whatsapp%'")).all())
+    if not m:
+        return {"status": "disabled"}
+    sess = m.get("whatsapp_session_status")
+    channels: dict = {}
+    for k, v in m.items():
+        for pre, field in (("whatsapp_fetch_ok_", "fetch_ok"),
+                           ("whatsapp_fetch_err_", "fetch_err"),
+                           ("whatsapp_degraded_", "degraded"),
+                           ("whatsapp_last_msg_", "last_msg")):
+            if k.startswith(pre) and not k.startswith("whatsapp_fetch_errmsg_"):
+                slug = k[len(pre):]
+                channels.setdefault(slug, {})[field] = _meta_int(v) if field != "degraded" else v
+        if k.startswith("whatsapp_stats_"):
+            slug = k[len("whatsapp_stats_"):]
+            try:
+                channels.setdefault(slug, {})["stats"] = json.loads(v)
+            except (TypeError, ValueError):
+                pass
+    # agregado por canal (los slugs sin descargas, p. ej. '_all' de
+    # contadores globales, no influyen en el estado)
+    worst = "ok"
+    real = {s: ch for s, ch in channels.items()
+            if ch.get("fetch_ok") is not None or ch.get("fetch_err") is not None}
+    for slug, ch in real.items():
+        ok, err = ch.get("fetch_ok"), ch.get("fetch_err")
+        if ok is None:
+            st = "down"
+        elif err and err > ok:
+            st = "down"
+        elif now - ok > 600:
+            st = "stale"
+        elif ch.get("degraded"):
+            st = "degraded"
+        else:
+            st = "ok"
+        ch["status"] = st
+        order = {"down": 3, "degraded": 2, "stale": 1, "ok": 0}
+        if order[st] > order[worst]:
+            worst = st
+    if sess and sess != "WORKING" and worst == "ok":
+        worst = "degraded"
+    if not real and not sess:
+        return {"status": "disabled"}
+    return {"status": worst, "session": sess, "channels": channels}
 
 
 # ---------- alta manual (administrador) ----------

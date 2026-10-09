@@ -32,7 +32,7 @@ from api.common import (
     nucleo_public,
 )
 from api.db import engine
-from api.notices import threads_for_filters
+from api.notices import threads_for_filters, whatsapp_health
 
 router = APIRouter(prefix="/api/v1")
 
@@ -621,15 +621,21 @@ def incidencias(feed: str = Query("cer", pattern="^(cer|ld)$"),
                     None, pattern="^(accesibilidad|obras|interrumpido|alternativo|otras)$"),
                 periodo: str = Query(
                     "actuales", pattern="^(actuales|vigentes|proximas|recientes|todas)$"),
+                aviso_estado: str = Query(
+                    "abiertos", pattern="^(abiertos|todos)$"),
+                aviso_horas: int = Query(24, ge=1, le=720),
                 origen: str | None = None, destino: str | None = None):
     """Avisos oficiales normalizados. `periodo`: actuales (publicados,
     vigentes o futuros), vigentes, proximas, recientes (retirados o
-    caducados en los últimos 7 días) o todas."""
+    caducados en los últimos 7 días) o todas. `aviso_estado`/`aviso_horas`
+    filtran los avisos de canales oficiales (WhatsApp/manual)."""
     out = query(feed, nucleo, linea, estacion, categoria, periodo,
                 origen, destino)
-    # avisos oficiales (WhatsApp/manual) abiertos: solo Cercanías
-    out["official_notices"] = (threads_for_filters(nucleo, linea, estacion)
-                               if feed == "cer" else [])
+    # avisos oficiales (WhatsApp/manual): solo Cercanías
+    out["official_notices"] = (threads_for_filters(
+        nucleo, linea, estacion, horas=aviso_horas, estado=aviso_estado)
+        if feed == "cer" else [])
+    out["sources"] = ({"whatsapp": whatsapp_health()} if feed == "cer" else {})
     return out
 
 
