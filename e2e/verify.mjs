@@ -57,6 +57,29 @@ for (const mob of [false, true]) {
       { waitUntil: 'domcontentloaded' });
     await pg.waitForSelector('body');
   });
+  await run('estadísticas: página y filtros', mob, async (pg) => {
+    await pg.goto(BASE + '/estadisticas', { waitUntil: 'domcontentloaded' });
+    await pg.waitForSelector('.statsx select', { timeout: 8000 });
+    if (!(await pg.locator('text=no es puntualidad real').count())
+        && !(await pg.locator('text=no es').count()))
+      throw new Error('sin aviso de semántica');
+    // núcleo Madrid -> líneas y ejecución
+    await pg.selectOption('form.filtros select >> nth=0', 'madrid');
+    await pg.locator('button.go').click();
+    await pg.waitForSelector('.kindcard', { timeout: 20000 });
+    if (!(await pg.locator('.gate').count()))
+      throw new Error('sin gate visible');
+    if (!(await pg.locator('text=Comparativa').count()))
+      throw new Error('sin bloque comparativa');
+  });
+  await run('estadísticas: metodología accesible', mob, async (pg) => {
+    await pg.goto(BASE + '/estadisticas', { waitUntil: 'domcontentloaded' });
+    await pg.waitForSelector('details.met summary', { timeout: 8000 });
+    await pg.locator('details.met summary').click();
+    await pg.waitForSelector('details.met li', { timeout: 8000 });
+    if (!(await pg.locator('details.met').locator('text=Gate').count()))
+      throw new Error('metodología sin gate');
+  });
 }
 await b.close();
 console.log(ok ? 'ALL OK' : 'HAY FALLOS');

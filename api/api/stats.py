@@ -134,10 +134,15 @@ def _eval_gate(n: int, days_obs: int, cov: float | None, level: str) -> dict:
 
 
 def _nucleo_slugs() -> dict:
-    """slug -> código NUCLEO oficial. Misma identidad que el resto del
-    sitio (api.common / line_route): un único modelo de núcleo."""
-    from api.common import NUCLEO_BY_SLUG
-    return dict(NUCLEO_BY_SLUG)
+    """slug -> nombre oficial de núcleo (geo_station, fuente verificable)."""
+    try:
+        with engine.connect() as c:
+            rows = c.execute(text(
+                "SELECT DISTINCT nucleo FROM geo_station"
+                " WHERE nucleo IS NOT NULL")).scalars().all()
+    except Exception:
+        return {}
+    return {_tslug(n): n for n in rows}
 
 
 def _terr_codes(ccaa, provincia):
@@ -172,15 +177,14 @@ def _stats_scope(feed, nucleo, line, ccaa, provincia, station,
         if nucleo not in nucs:
             return None, {"error": f"núcleo desconocido: {nucleo}"}, None
         p["nuc"] = nucs[nucleo]
-        where.append("""EXISTS (SELECT 1 FROM line_route lr
-            WHERE lr.feed=c.feed AND lr.route_id=c.route_id
-              AND lr.nucleo_code=:nuc)""")
+        where.append("""EXISTS (SELECT 1 FROM route_core rc
+            WHERE rc.feed=c.feed AND rc.route_id=c.route_id
+              AND rc.nucleo=:nuc)""")
     if line:
-        # slug de línea o familia (c4, c4a); en LD, el producto (ave, md…)
-        p["line"] = line.lower()
-        where.append("""EXISTS (SELECT 1 FROM line_route lr
-            WHERE lr.feed=c.feed AND lr.route_id=c.route_id
-              AND (lr.line_slug=:line OR lr.family_slug=:line))""")
+        p["line"] = line
+        where.append("""EXISTS (SELECT 1 FROM routes r
+            WHERE r.feed=c.feed AND r.route_id=c.route_id
+              AND r.short_name=:line)""")
     if station:
         fs = station.split(":")
         if len(fs) != 2 or fs[0] not in ("cer", "ld"):
@@ -258,17 +262,18 @@ def _hm(secs: int) -> str:
 @stats_router.get("/stats/options")
 def stats_options():
     """Ámbitos filtrables verificables para /stats/delays."""
-    from api.common import NUCLEOS
+    nucs = _nucleo_slugs()
     with engine.connect() as c:
         lines = c.execute(text("""
-            SELECT lr.nucleo_code AS nucleo, lr.family_code AS short_name,
-                   count(DISTINCT lr.route_id) AS n
-            FROM line_route lr
-            WHERE lr.nucleo_code IS NOT NULL AND lr.n_trips > 0
-            GROUP BY 1, 2 ORDER BY 1, 2""")).mappings().all()
+            SELECT rc.nucleo, r.short_name, count(DISTINCT r.route_id) AS n
+            FROM route_core rc
+            JOIN routes r ON r.feed=rc.feed AND r.route_id=rc.route_id
+            WHERE rc.nucleo IS NOT NULL
+            GROUP BY rc.nucleo, r.short_name ORDER BY 1, 2""")).mappings().all()
         st_per_nuc = {r["nucleo"]: r["count"] for r in c.execute(text(
-            "SELECT nucleo_code AS nucleo, count(*) FROM station_nucleo"
-            " GROUP BY nucleo_code")).mappings()}
+            "SELECT nucleo, count(*) FROM geo_station"
+            " WHERE nucleo IS NOT NULL AND active=1"
+            " GROUP BY nucleo")).mappings()}
         ld_lines = c.execute(text(
             "SELECT DISTINCT short_name FROM routes WHERE feed='ld'"
             " AND short_name IS NOT NULL AND short_name != ''"
@@ -277,10 +282,10 @@ def stats_options():
     for r in lines:
         nuc_lines.setdefault(r["nucleo"], []).append(
             {"line": r["short_name"], "routes": r["n"]})
-    nucleos = [{"slug": NUCLEOS[code]["slug"], "name": NUCLEOS[code]["name"],
-                "stations": st_per_nuc.get(code, 0),
-                "lines": nuc_lines.get(code, [])}
-               for code in NUCLEOS if nuc_lines.get(code)]
+    nucleos = [{"slug": _tslug(n), "name": n,
+                "stations": st_per_nuc.get(n, 0),
+                "lines": nuc_lines.get(n, [])}
+               for n in nucs.values()]
     nucleos.sort(key=lambda x: -x["stations"])
     return {"nucleos": nucleos, "ld_lines": ld_lines,
             "gate": STATS_GATE, "semantics": _STATS_SEMANTICS}
@@ -310,8 +315,8 @@ def _delay_stats(feed, nucleo, line, ccaa, provincia, station,
         numer = {}
         for kind in ("reported", "prediction"):
             params = dict(p)
-            for f in feeds_scope:
-                params[f"capd_{f}"] = capd[f][kind]
+            for f in ("cer", "ld"):          # binds siempre presentes
+                params[f"capd_{f}"] = (capd.get(f) or {}).get(kind)
             rows = c.execute(text(f"""
                 SELECT DISTINCT ON (o.trip_id, o.service_date, o.feed)
                        o.feed, o.trip_id, o.service_date, o.delay
@@ -402,16 +407,17 @@ def stats_delays(feed: str | None = Query(None, pattern="^(cer|ld)$"),
     obs_by_day: dict = {}
     for kind, rows in r["numer"].items():
         for row in rows:
-            obs_by_day.setdefault(str(row["service_date"]), set()).add(kind)
+            k = str(row["service_date"])
+            obs_by_day.setdefault(k, {})[kind] =                 obs_by_day.setdefault(k, {}).get(kind, 0) + 1
     by_day = [{"day": str(x["day"]), "feed": x["feed"],
                "scheduled": x["n"],
-               "kinds_with_data": sorted(obs_by_day.get(str(x["day"]), []))}
+               "with_data": obs_by_day.get(str(x["day"]), {})}
               for x in r["sched_rows"]]
     links = {}
     if station:
         links["station"] = f"/estacion/{station}"
     if frm and to:
-        links["journey"] = f"/trayecto?o={frm}&d={to}"
+        links["journey"] = f"/trayecto?from={frm}&to={to}"
     return {
         "scope": {k: v for k, v in
                   {"feed": feed, "nucleo": nucleo, "line": line,

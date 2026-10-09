@@ -15,7 +15,7 @@ const path = Astro.url.pathname;
 const NAV = [
   ['/horarios', 'Horarios'], ['/estaciones', 'Estaciones'], ['/lineas', 'Líneas'],
   ['/nucleos', 'Núcleos'], ['/incidencias', 'Incidencias'], ['/retrasos', 'Retrasos'],
-  ['/favoritos', 'Favoritos'],
+  ['/estadisticas', 'Estadísticas'], ['/favoritos', 'Favoritos'],
 ];
 const isCur = (href: string) => path === href || path.startsWith(href + '/')
   || (href === '/estaciones' && path.startsWith('/estacion/'))

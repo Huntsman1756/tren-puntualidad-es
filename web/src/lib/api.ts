@@ -70,6 +70,13 @@ export const api = {
   coverage: () => get('/api/v1/meta/coverage'),
   punctuality: (feed: string, id: string, days = 7) =>
     get(`/api/v1/stations/${feed}/${id}/punctuality?days=${days}`),
+  statsOptions: () => get('/api/v1/stats/options'),
+  statsDelays: (q: Record<string, string>) =>
+    get(`/api/v1/stats/delays?${new URLSearchParams(q)}`),
+  statsCompare: (q: Record<string, string>) =>
+    get(`/api/v1/stats/compare?${new URLSearchParams(q)}`),
+  geoCcaa: () => get('/api/v1/geo/ccaa'),
+  geoProv: (ccaa: string) => get(`/api/v1/geo/ccaa/${ccaa}`),
 };
 
 /** Último día válido común a las redes indicadas (o a todas). */

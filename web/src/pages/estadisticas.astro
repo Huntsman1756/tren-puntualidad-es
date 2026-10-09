@@ -1,0 +1,17 @@
+---
+import Base from '../layouts/Base.astro';
+import StatsExplorer from '../components/StatsExplorer.svelte';
+---
+<Base title="Estadísticas de retrasos informados — Trenes a tiempo"
+      description="Distribuciones de retrasos informados por línea, núcleo, provincia, estación y trayecto. Retrasos notificados por las fuentes RT de Renfe, con criterios estadísticos públicos."
+      canonical="/estadisticas">
+  <p><a href="/">← Buscador</a></p>
+  <h1>Estadísticas</h1>
+  <p class="muted">Distribución del <strong>retraso informado</strong> por las
+    fuentes de tiempo real de Renfe — flota del visor y predicciones GTFS-RT.
+    Esto <strong>no es puntualidad real</strong> ni llegada efectiva:
+    no existe feed oficial de llegada observada. Las métricas descriptivas solo
+    se publican cuando la cobertura las hace defendibles
+    (<a href="/fuentes">metodología</a>).</p>
+  <StatsExplorer client:load />
+</Base>
