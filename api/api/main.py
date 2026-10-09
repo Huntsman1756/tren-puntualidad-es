@@ -885,7 +885,7 @@ def _radar_ext(feed: str, train_number: str | None, day) -> dict | None:
             r = c.execute(text("""
                 SELECT platform, rolling_stock, next_stop_id, next_eta,
                        delay_min, product, provider_ts, observed_at,
-                       identity_src
+                       identity_src, instances
                 FROM rt_ext_ld WHERE train_number=:n AND service_date=:d"""),
                 {"n": train_number, "d": day}).mappings().first()
     except Exception:
@@ -894,6 +894,10 @@ def _radar_ext(feed: str, train_number: str | None, day) -> dict | None:
         return None
     now = int(time.time())
     stale = (r["provider_ts"] or r["observed_at"] or 0) < now - _EXT_STALE_S
+    # instancia única = 1 trip_id GTFS para (número, fecha); >1 el número
+    # comercial agrupa etapas y vía/ETA pueden corresponder a otra etapa
+    inst = r["instances"]
+    ambiguous = inst is not None and inst > 1
     return {"source": "radar",
             "platform": r["platform"],
             "rolling_stock": r["rolling_stock"],
@@ -904,7 +908,10 @@ def _radar_ext(feed: str, train_number: str | None, day) -> dict | None:
             "provider_ts": r["provider_ts"],
             "observed_at": r["observed_at"],
             "identity_src": r["identity_src"],
-            "verified": r["identity_src"] in ("launching", "coverage"),
+            "instances": inst,
+            "ambiguous": ambiguous,
+            "verified": (r["identity_src"] in ("launching", "coverage")
+                         and inst == 1),
             "stale": stale}
 
 

@@ -136,20 +136,43 @@ def poll_radar() -> int:
                 # el número no figura en nuestro GTFS esos días
                 w["sd"] = today
                 w["src"] = "civil"
+    # nº de instancias GTFS (trip_id) candidatas por (train_number,
+    # service_date): un número comercial puede agrupar etapas del mismo
+    # día; con >1 el enriquecimiento es ambiguo y no se verifica
+    pairs = {(w["tn"], w["sd"]) for w in rows}
+    inst: dict = {}
+    if pairs:
+        with engine.connect() as c:
+            for tn, day, n in c.execute(
+                text("""
+                SELECT t.train_number, sd.day, count(DISTINCT t.trip_id)
+                FROM trips t
+                JOIN service_days sd ON sd.feed='ld'
+                    AND sd.service_id=t.service_id
+                WHERE t.feed='ld' AND t.train_number=ANY(:tns)
+                  AND sd.day=ANY(:days)
+                GROUP BY 1, 2"""),
+                {"tns": sorted({t for t, _ in pairs}),
+                 "days": sorted({d for _, d in pairs})},
+            ):
+                inst[(tn, day)] = n
+    for w in rows:
+        w["inst"] = inst.get((w["tn"], w["sd"]), 0)
     with engine.begin() as c:
         for w in rows:
             c.execute(
                 text("""
                 INSERT INTO rt_ext_ld(train_number, service_date, platform,
                     rolling_stock, next_stop_id, next_eta, delay_min,
-                    product, provider_ts, observed_at, source, identity_src)
-                VALUES(:tn,:sd,:pf,CAST(:rs AS jsonb),:ns,:eta,:dm,:pr,:pts,:obs,'radar',:src)
+                    product, provider_ts, observed_at, source, identity_src,
+                    instances)
+                VALUES(:tn,:sd,:pf,CAST(:rs AS jsonb),:ns,:eta,:dm,:pr,:pts,:obs,'radar',:src,:inst)
                 ON CONFLICT(train_number,service_date) DO UPDATE SET
                   platform=EXCLUDED.platform, rolling_stock=EXCLUDED.rolling_stock,
                   next_stop_id=EXCLUDED.next_stop_id, next_eta=EXCLUDED.next_eta,
                   delay_min=EXCLUDED.delay_min, product=EXCLUDED.product,
                   provider_ts=EXCLUDED.provider_ts, observed_at=EXCLUDED.observed_at,
-                  identity_src=EXCLUDED.identity_src
+                  identity_src=EXCLUDED.identity_src, instances=EXCLUDED.instances
             """),
                 w,
             )
@@ -176,6 +199,7 @@ def poll_radar() -> int:
                     "provider_rows": len(rows),
                     "matched": matched,
                     "identity_src": by_src,
+                    "ambiguous": sum(1 for w in rows if (w["inst"] or 0) > 1),
                     "provider_ts": provider_ts,
                     "observed_at": observed,
                 }
