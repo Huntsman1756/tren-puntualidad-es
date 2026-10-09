@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.11] — 2026-10-09
+### Planificador con un transbordo — correcciones de corrección
+- Las prohibiciones y mínimos de `transfers.txt` se evalúan SOLO sobre su
+  `to_stop_id`: una regla X->Z ya no cierra ni contamina una conexión X->Y.
+- Los enlaces oficiales de `transfers.txt` entre paradas distintas
+  (Embajadores->Atocha Cercanías, Puente Alcocer, Montcada...) se usan
+  como candidatos reales de enlace, con filtros y prohibiciones por
+  pareja de trenes.
+- Caminar como primer tramo respeta la hora solicitada (comparación en el
+  reloj nominal, no epoch).
+- Los resultados se ordenan por llegada antes de asignar nombres de
+  estación: los 20 devueltos los llevan siempre.
+- QA e2e a tres motores (Chromium/Firefox/WebKit) con proxy same-origin
+  equivalente a producción: 37/37 en cada uno.
+### Rollback
+- Igual que v0.3.10: volver a `v0.3.9` (o `v0.3.10` si el fallo fuera
+  solo de estas correcciones) y `transfers=0` reproduce la respuesta
+  previa sin despliegue.
+
 ## [0.3.10] — 2026-10-09
 ### Planificador con un transbordo
 - `/api/v1/journeys/plan` devuelve `transfers[]` además de directos
