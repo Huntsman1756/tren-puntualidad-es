@@ -36,6 +36,8 @@
   `capture_health` + `sched_capture` (ver stats.py `REPRESENTATIVITY`).
 - E2E navegador (escritorio + móvil): `cd e2e && BASE=<url web> node v034.mjs`.
   BROWSER=chromium|firefox|webkit; `node proxy.mjs` da same-origin local.
+- Ramas release/*: una vez publicado el tag, la rama queda inmutable
+  (los mantenimientos abren release/vX.Y.Z nueva); el rollback usa el TAG.
 - Los 7 skips de la suite son tests/test_integration_api.py: necesitan una
   API real corriendo en :8000 (integración viva, no TestClient).
 - Identidad de líneas: `curl localhost:8000/api/v1/lineas-audit` (route_id → núcleo, evidencia).
