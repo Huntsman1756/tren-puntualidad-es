@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.14] — 2026-10-09
 ### Avisos oficiales / WAHA (experimental, sigue desactivado)
 - El adaptador `_msg_fields` entiende el envoltorio real de
   `messages/preview` (`{reactions, viewCount, message:{id,timestamp,body}}`)
