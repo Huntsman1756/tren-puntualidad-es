@@ -124,7 +124,10 @@ services:
     environment:
       # Motor por defecto GOWS; si falla la lectura de canales, probar WEBJS.
       WHATSAPP_DEFAULT_ENGINE: GOWS
-      WAHA_API_KEY: ${WAHA_API_KEY:?WAHA_API_KEY requerido para el perfil waha}
+      # Sin WAHA_API_KEY el servicio exige esta clave inexistente: no se puede
+      # usar la API de WAHA sin configurar una clave real (no ":?" porque el
+      # parser de compose la evalúa aunque el perfil no se levante).
+      WAHA_API_KEY: ${WAHA_API_KEY:-waha-perfil-no-configurado}
       WAHA_DASHBOARD_ENABLED: "false"
       WHATSAPP_RESTART_ALL_SESSIONS: "true"
     volumes:
