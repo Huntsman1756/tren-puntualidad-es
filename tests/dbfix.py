@@ -7,6 +7,7 @@ Escenario sintético mínimo pero representativo:
 - 60T0009C3: prefijo Bilbao pero sus paradas son de León -> conflicto.
 - Un viaje nocturno cruza medianoche (dep 23:50, llegada 24:10).
 """
+
 import os
 from datetime import date, datetime, timedelta
 
@@ -33,9 +34,14 @@ STOPS = [
     ("ld", "71801", "Barcelona-Sants", 41.379, 2.140),
 ]
 OFFICIAL = {  # CODIGO_ESTACION -> (NUCLEO, LINEAS) del visor oficial
-    "17000": ("10", "C1,C4a"), "18000": ("10", "C1,C4a"),
-    "10000": ("10", "C4a"), "15211": ("20", "C1"), "15410": ("20", "C1"),
-    "71801": ("50", "R1"), "72400": ("50", "R1"), "05778": ("47", "C1"),
+    "17000": ("10", "C1,C4a"),
+    "18000": ("10", "C1,C4a"),
+    "10000": ("10", "C4a"),
+    "15211": ("20", "C1"),
+    "15410": ("20", "C1"),
+    "71801": ("50", "R1"),
+    "72400": ("50", "R1"),
+    "05778": ("47", "C1"),
     "05761": ("47", "C1"),
 }
 ROUTES = [
@@ -45,15 +51,17 @@ ROUTES = [
     ("cer", "10T0099C4A", "C4A", 2, "2C2A86"),
     ("cer", "51T0001R1", "R1", 2, "7DB9E8"),
     ("cer", "60T0009C3", "C3", 2, "000000"),
-    ("cer", "10T0109C8b", "C8b", 3, "868584"),   # bus alternativo
+    ("cer", "10T0109C8b", "C8b", 3, "868584"),  # bus alternativo
     ("ld", "LD_AVE_MAD_BCN", "AVE", 2, None),
 ]
 H = 3600
 
 
 def _st(trip, rows):
-    return [("cer" if not trip.startswith("LD") else "ld", trip, i + 1, s, a, d)
-            for i, (s, a, d) in enumerate(rows)]
+    return [
+        ("cer" if not trip.startswith("LD") else "ld", trip, i + 1, s, a, d)
+        for i, (s, a, d) in enumerate(rows)
+    ]
 
 
 TRIPS = [  # feed, trip_id, route, service, train_number
@@ -68,39 +76,60 @@ TRIPS = [  # feed, trip_id, route, service, train_number
     ("cer", "MAD_C2_0900", "20T0002C2", "S_ALL", "23010"),
     ("cer", "MAD_C5_0930", "10T0013C4a", "S_ALL", "23020"),
     ("cer", "MAD_C9_0935", "20T0002C2", "S_ALL", "23030"),
+    ("cer", "MAD_C7_0800", "10T0099C4A", "S_ALL", "22020"),
     ("ld", "LD_03100", "LD_AVE_MAD_BCN", "S_ALL", "03100"),
     ("ld", "LD_03110", "LD_AVE_MAD_BCN", "S_ALL", "03110"),
 ]
 STOP_TIMES = (
     _st("MAD_C1_0600", [("17000", 6 * H, 6 * H), ("18000", 6 * H + 1200, 6 * H + 1200)])
-    + _st("MAD_C1_2350", [("17000", 23 * H + 3000, 23 * H + 3000),
-                          ("18000", 24 * H + 600, 24 * H + 600)])
-    + _st("MAD_C4A_0700", [("10000", 7 * H, 7 * H), ("17000", 7 * H + 900, 7 * H + 900),
-                           ("18000", 7 * H + 1800, 7 * H + 1800)])
-    + _st("MAD_C4AX_0710", [("10000", 7 * H + 600, 7 * H + 600),
-                            ("17000", 7 * H + 1500, 7 * H + 1500)])
+    + _st("MAD_C1_2350", [("17000", 23 * H + 3000, 23 * H + 3000), ("18000", 24 * H + 600, 24 * H + 600)])
+    + _st(
+        "MAD_C4A_0700",
+        [("10000", 7 * H, 7 * H), ("17000", 7 * H + 900, 7 * H + 900), ("18000", 7 * H + 1800, 7 * H + 1800)],
+    )
+    + _st("MAD_C4AX_0710", [("10000", 7 * H + 600, 7 * H + 600), ("17000", 7 * H + 1500, 7 * H + 1500)])
     + _st("AST_C1_0600", [("15211", 6 * H, 6 * H), ("15410", 6 * H + 1800, 6 * H + 1800)])
     + _st("BCN_R1_0800", [("72400", 8 * H, 8 * H), ("71801", 8 * H + 2400, 8 * H + 2400)])
     + _st("BIL_C3_0900", [("05778", 9 * H, 9 * H), ("05761", 9 * H + 3600, 9 * H + 3600)])
-    + _st("MAD_C4B_0755", [("18000", 7 * H + 3300, 7 * H + 3300),
-                           ("17000", 8 * H + 900, 8 * H + 900)])
-    + _st("MAD_C2_0900", [("17000", 9 * H, 9 * H),
-                          ("15211", 14 * H, 14 * H)])
-    + _st("MAD_C5_0930", [("18000", 9 * H + 1800, 9 * H + 1800),
-                          ("10000", 10 * H, 10 * H)])
-    + _st("MAD_C9_0935", [("15410", 9 * H + 2100, 9 * H + 2100),
-                          ("99998", 10 * H + 1800, 10 * H + 1800)])
+    + _st("MAD_C4B_0755", [("18000", 7 * H + 3300, 7 * H + 3300), ("17000", 8 * H + 900, 8 * H + 900)])
+    + _st("MAD_C2_0900", [("17000", 9 * H, 9 * H), ("15211", 14 * H, 14 * H)])
+    + _st("MAD_C5_0930", [("18000", 9 * H + 1800, 9 * H + 1800), ("10000", 10 * H, 10 * H)])
+    + _st("MAD_C9_0935", [("15410", 9 * H + 2100, 9 * H + 2100), ("99998", 10 * H + 1800, 10 * H + 1800)])
+    + _st("MAD_C7_0800", [("18000", 8 * H, 8 * H), ("17000", 8 * H + 1200, 8 * H + 1200)])
     + _st("LD_03100", [("17000", 9 * H, 9 * H), ("71801", 12 * H, 12 * H)])
-    + _st("LD_03110", [("60000", 8 * H + 3600, 8 * H + 3600),
-                       ("71801", 11 * H + 3600, 11 * H + 3600)])
+    + _st("LD_03110", [("60000", 8 * H + 3600, 8 * H + 3600), ("71801", 11 * H + 3600, 11 * H + 3600)])
 )
 
-TABLES = ["stops", "routes", "trips", "stop_times", "service_days",
-          "trip_flags", "trip_span", "line_route", "station_nucleo",
-          "alerts", "alerts_seen", "rt_trip", "rt_stop_update", "rt_fleet",
-          "rt_vehicle", "shapes", "shape_quality", "push_rules", "push_devices", "push_subs", "meta",
-          "capture_health", "anomaly_episode", "anomaly_sample", "official_notice",
-          "gtfs_transfer", "transfer_link", "rt_ext_ld"]
+TABLES = [
+    "stops",
+    "routes",
+    "trips",
+    "stop_times",
+    "service_days",
+    "trip_flags",
+    "trip_span",
+    "line_route",
+    "station_nucleo",
+    "alerts",
+    "alerts_seen",
+    "rt_trip",
+    "rt_stop_update",
+    "rt_fleet",
+    "rt_vehicle",
+    "shapes",
+    "shape_quality",
+    "push_rules",
+    "push_devices",
+    "push_subs",
+    "meta",
+    "capture_health",
+    "anomaly_episode",
+    "anomaly_sample",
+    "official_notice",
+    "gtfs_transfer",
+    "transfer_link",
+    "rt_ext_ld",
+]
 
 
 def service_days(days_all=range(-1, 8), d2=(2,)):
@@ -113,36 +142,52 @@ def service_days(days_all=range(-1, 8), d2=(2,)):
 
 def load_scenario(conn):
     from collector.lines import compute_line_routes, compute_trip_spans
+
     for t in TABLES:
         conn.execute(text(f"DELETE FROM {t}"))
-    conn.execute(text("INSERT INTO stops VALUES (:f,:s,:n,:la,:lo)"),
-                 [dict(f=a, s=b, n=c, la=d, lo=e) for a, b, c, d, e in STOPS])
-    conn.execute(text("""INSERT INTO routes (feed, route_id, short_name, long_name,
+    conn.execute(
+        text("INSERT INTO stops VALUES (:f,:s,:n,:la,:lo)"),
+        [dict(f=a, s=b, n=c, la=d, lo=e) for a, b, c, d, e in STOPS],
+    )
+    conn.execute(
+        text("""INSERT INTO routes (feed, route_id, short_name, long_name,
         route_type, color) VALUES (:f,:r,:s,:ln,:t,:c)"""),
-        [dict(f=f, r=r, s=s, ln=f"Ruta {r}", t=t, c=c) for f, r, s, t, c in ROUTES])
-    conn.execute(text("""INSERT INTO trips (feed, trip_id, route_id, service_id,
+        [dict(f=f, r=r, s=s, ln=f"Ruta {r}", t=t, c=c) for f, r, s, t, c in ROUTES],
+    )
+    conn.execute(
+        text("""INSERT INTO trips (feed, trip_id, route_id, service_id,
         train_number) VALUES (:f,:t,:r,:s,:n)"""),
-        [dict(f=f, t=t, r=r, s=s, n=n) for f, t, r, s, n in TRIPS])
-    conn.execute(text("""INSERT INTO stop_times (feed, trip_id, seq, stop_id, arr, dep)
+        [dict(f=f, t=t, r=r, s=s, n=n) for f, t, r, s, n in TRIPS],
+    )
+    conn.execute(
+        text("""INSERT INTO stop_times (feed, trip_id, seq, stop_id, arr, dep)
         VALUES (:f,:t,:q,:s,:a,:d)"""),
-        [dict(f=f, t=t, q=q, s=s, a=a, d=d) for f, t, q, s, a, d in STOP_TIMES])
-    conn.execute(text("INSERT INTO service_days VALUES (:f,:s,:d)"),
-                 [dict(f=f, s=s, d=d) for f, s, d in service_days()])
-    conn.execute(text("""INSERT INTO station_nucleo (code, nucleo_code, lineas,
+        [dict(f=f, t=t, q=q, s=s, a=a, d=d) for f, t, q, s, a, d in STOP_TIMES],
+    )
+    conn.execute(
+        text("INSERT INTO service_days VALUES (:f,:s,:d)"),
+        [dict(f=f, s=s, d=d) for f, s, d in service_days()],
+    )
+    conn.execute(
+        text("""INSERT INTO station_nucleo (code, nucleo_code, lineas,
         fetched_at) VALUES (:c,:n,:l,0)"""),
-        [dict(c=c, n=n, l=lin) for c, (n, lin) in OFFICIAL.items()])
+        [dict(c=c, n=n, l=lin) for c, (n, lin) in OFFICIAL.items()],
+    )
     for f in ("cer", "ld"):
         compute_trip_spans(conn, f)
     compute_line_routes(conn)
     from collector.transfer_links import seed_transfer_links
+
     seed_transfer_links(conn)
     # enlace de test: la estación cer:17000 ('Atocha Cercanías' en el
     # escenario) enlaza a pie con el edificio AV ld:60000
-    conn.execute(text("""
+    conn.execute(
+        text("""
         INSERT INTO transfer_link(link_id,from_feed,from_stop_id,to_feed,
                                   to_stop_id,min_secs,kind,label,source)
         VALUES('test_walk','cer','17000','ld','60000',900,'walk',
-               'Enlace de test','fixture')"""))
+               'Enlace de test','fixture')""")
+    )
 
 
 def reset_api_caches():
@@ -150,6 +195,7 @@ def reset_api_caches():
     import api.incidents as inc
     import api.main as m
     import api.planner as planner
+
     common.reset_caches()
     planner.reset_cache()
     inc._stop_cache["ts"] = 0
@@ -168,6 +214,7 @@ def db_engine():
     if not os.environ.get("TEST_DATABASE_URL"):
         pytest.skip("TEST_DATABASE_URL no definido (BD de test aislada)")
     from collector.db import engine, wait_and_create
+
     try:
         wait_and_create(retries=2)
     except Exception as e:
@@ -187,6 +234,7 @@ def scenario(db_engine):
 def client(scenario):
     from api.main import app
     from fastapi.testclient import TestClient
+
     with TestClient(app) as c:
         reset_api_caches()
         yield c

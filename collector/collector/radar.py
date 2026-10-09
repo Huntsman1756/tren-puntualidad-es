@@ -9,9 +9,11 @@ parada). Lo almacenamos en `rt_ext_ld` con trazabilidad completa
 (provider_ts + observed_at + source='radar') y la API lo expone como
 bloque `ext` — nunca sustituye al dato Renfe ni bloquea a la API.
 
-Identidad estricta: (trainCode, fecha de circulación). La fecha se deriva
-del trip_id LD (`NNNNNvYYYY-MM-DD`) al enlazar; el servicio mostrado es el
-que circula ahora en la zona Europe/Madrid.
+Identidad estricta: (trainCode, fecha de servicio). La fecha la declara
+`launchingDate` cuando el proveedor la envía; si no, se resuelve por
+COBERTURA GTFS: el día (hoy/ayer/mañana) en que ese número figura en
+service_days — preferente hoy, luego ayer (nocturnos), luego mañana.
+Nunca por similitud de identificadores.
 
 Desactivado por defecto: RADAR_ENABLED=1 lo activa. Si la fuente falla,
 los datos previos quedan y se marcan `stale` en la API.
@@ -20,7 +22,7 @@ los datos previos quedan y se marcan `stale` en la API.
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -66,19 +68,24 @@ def poll_radar() -> int:
     provider_ts = _iso_to_epoch(body.get("updatedAt"))
     observed = int(time.time())
     rows = []
+    today = datetime.now(TZ).date()
     for t in trains:
         code = (t.get("trainCode") or "").strip()
         if not code:
             continue
         platform = (t.get("platform") or "").strip()
+        # launchingDate: fecha de servicio declarada por el proveedor
+        # (ausente en las respuestas observadas; se respeta si aparece)
+        ld = _iso_to_epoch(t.get("launchingDate"))
+        sdate = (
+            datetime.fromtimestamp(ld, TZ).date()
+            if ld
+            else None
+        )
         rows.append(
             {
                 "tn": code,
-                # el feed lista trenes en circulación: su fecha de servicio es
-                # el día civil actual en Europe/Madrid (salvo el raro caso de
-                # un nocturno que aún no hemos podido verificar — la PK lo
-                # admite: añade otra fila sin colisionar)
-                "sd": datetime.now(TZ).date(),
+                "sd": sdate,
                 "pf": platform if platform and platform != "0" else None,
                 "rs": json.dumps(t["rollingStock"]) if t.get("rollingStock") else None,
                 "ns": (t.get("nextStationCode") or "").strip() or None,
@@ -91,6 +98,33 @@ def poll_radar() -> int:
         )
     if not rows:
         return 0
+    # service_date sin launchingDate: resolución por COBERTURA GTFS —
+    # el día (hoy/ayer/mañana) en que ese número figura en service_days,
+    # preferente hoy, luego ayer (nocturnos desplazados), luego mañana.
+    # Determinista: nada de similitud de identificadores.
+    missing = {w["tn"] for w in rows if w["sd"] is None}
+    if missing:
+        cov = {}
+        with engine.connect() as c:
+            for tn, day in c.execute(
+                text("""
+                SELECT DISTINCT t.train_number, sd.day FROM trips t
+                JOIN service_days sd ON sd.feed='ld'
+                    AND sd.service_id=t.service_id
+                WHERE t.feed='ld' AND t.train_number=ANY(:t)
+                  AND sd.day BETWEEN :a AND :b"""),
+                {
+                    "t": list(missing),
+                    "a": today - timedelta(days=1),
+                    "b": today + timedelta(days=1),
+                },
+            ):
+                cov.setdefault(tn, set()).add(day)
+        order = (today, today - timedelta(days=1), today + timedelta(days=1))
+        for w in rows:
+            if w["sd"] is None:
+                days = cov.get(w["tn"], set())
+                w["sd"] = next((d for d in order if d in days), today)
     with engine.begin() as c:
         for w in rows:
             c.execute(

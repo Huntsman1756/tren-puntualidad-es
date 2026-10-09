@@ -107,21 +107,41 @@ def _all_edges(feed, stop_id):
     filtros route/trip se validan luego por pareja en `_rule_for`."""
     other = "ld" if feed == "cer" else "cer"
     by_to = {
-        (feed, stop_id): {"to": (feed, stop_id), "slack": SLACK[(feed, feed)], "kind": "same_stop", "label": None},
-        (other, stop_id): {"to": (other, stop_id), "slack": SLACK[(feed, other)], "kind": "same_station", "label": None},
+        (feed, stop_id): {
+            "to": (feed, stop_id),
+            "slack": SLACK[(feed, feed)],
+            "kind": "same_stop",
+            "label": None,
+            "_manual": True,
+        },
+        (other, stop_id): {
+            "to": (other, stop_id),
+            "slack": SLACK[(feed, other)],
+            "kind": "same_station",
+            "label": None,
+            "_manual": True,
+        },
     }
     for e in _edges()["links"].get((feed, stop_id), []):
         prev = by_to.get(e["to"])
         if prev:
             prev["slack"] = max(prev["slack"], e["slack"])
+            prev["_manual"] = True
             if prev["kind"] in ("same_stop", "same_station"):
                 prev.update(kind=e["kind"], label=e.get("label"))
         else:
-            by_to[e["to"]] = dict(e)
+            by_to[e["to"]] = dict(e, _manual=True)
+    plain_to = set()
+    for g in _edges()["gtfs"].get((feed, stop_id), []):
+        if g["ttype"] in (0, 1, 2) and g["to_stop"] != stop_id and not _qualified(g):
+            plain_to.add(g["to_stop"])
     for g in _edges()["gtfs"].get((feed, stop_id), []):
         if g["ttype"] not in (0, 1, 2) or g["to_stop"] == stop_id:
             continue
-        slack = g["min_secs"] if g["min_secs"] is not None else SLACK[(feed, feed)]
+        # una regla con filtros route/trip NO eleva el slack ni crea el
+        # enlace para parejas ajenas: solo la precedencia por pareja decide
+        qualified = _qualified(g)
+        slack = g["min_secs"] if g["min_secs"] is not None and not qualified else SLACK[(feed, feed)]
         key = (feed, g["to_stop"])
         prev = by_to.get(key)
         if prev:
@@ -130,7 +150,16 @@ def _all_edges(feed, stop_id):
                 prev["kind"] = "gtfs_transfer"
         else:
             by_to[key] = {"to": key, "slack": slack, "kind": "gtfs_transfer", "label": None}
+        # si el enlace solo existe por reglas calificadas (sin regla de
+        # parada ni estructura), exige que la pareja (T1,T2) las cumpla
+        if qualified and g["to_stop"] not in plain_to and by_to[key].get("_manual") is None:
+            by_to[key]["requires_rule"] = by_to[key]["kind"] == "gtfs_transfer"
     return list(by_to.values())
+
+
+def _qualified(g):
+    """La regla está restringida a rutas o viajes concretos."""
+    return bool(g["from_route"] or g["to_route"] or g["from_trip"] or g["to_trip"])
 
 
 def _rule_for(rules, to_stop, t1_route, t1_trip, t2_route, t2_trip):
@@ -164,11 +193,11 @@ def _rule_for(rules, to_stop, t1_route, t1_trip, t2_route, t2_trip):
         elif rank == best:
             chosen.append(g)
     if best < 0:
-        return False, None
+        return False, None, False
     if any(g["ttype"] == 3 for g in chosen):
-        return True, None
-    mins = [g["min_secs"] for g in chosen if g["ttype"] == 2 and g["min_secs"] is not None]
-    return False, (max(mins) if mins else None)
+        return True, None, True
+    mins = [g["min_secs"] for g in chosen if g["ttype"] in (2, 5) and g["min_secs"] is not None]
+    return False, (max(mins) if mins else None), True
 
 
 def _rt_delays(trip_keys, stop_ids):
@@ -326,17 +355,22 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
             if fg != f_d:
                 continue
             dest_rules.setdefault((fg, x), gs)
+            plain = {g["to_stop"] for g in gs if g["ttype"] in (0, 1, 2) and not _qualified(g)}
             for g in gs:
                 if g["to_stop"] == s_d and g["ttype"] != 3:
                     # type 4: continuidad a bordo (no es enlace a pie)
                     if g["ttype"] == 4:
                         continue
+                    qualified = _qualified(g)
                     dest_edges[(fg, x)].append(
                         {
                             "to": (f_d, s_d),
-                            "slack": g["min_secs"] if g["min_secs"] is not None else SLACK[(f_d, f_d)],
+                            "slack": g["min_secs"]
+                            if g["min_secs"] is not None and not qualified
+                            else SLACK[(f_d, f_d)],
                             "kind": "gtfs_transfer" if g["ttype"] != 5 else "same_stop",
                             "label": None,
+                            "requires_rule": qualified and s_d not in plain,
                         }
                     )
 
@@ -434,8 +468,10 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
             for e in dest_edges.get((feed1, x), []):
                 f_d, s_d = e["to"]
                 # las prohibiciones gtfs desde X también rigen este cierre
-                forbidden, _ = _rule_for(dest_rules.get((feed1, x), []), s_d, lg1["route_id"], tid1, None, None)
-                if forbidden:
+                forbidden, _, applied = _rule_for(
+                    dest_rules.get((feed1, x), []), s_d, lg1["route_id"], tid1, None, None
+                )
+                if forbidden or (e.get("requires_rule") and not applied):
                     continue
                 arr_d = arr_x_eff + e["slack"]
                 arr_d_est = arr_x_est + e["slack"]
@@ -483,11 +519,11 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
                         continue
                     # precedencia GTFS: regla aplicable de mayor
                     # especificidad para ESTA pareja T1,T2
-                    forbidden, min_s = _rule_for(
+                    forbidden, min_s, applied = _rule_for(
                         gtfs_by_x.get((feed1, x), []), y, lg1["route_id"], tid1, r2["route_id"], tid2
                     )
-                    if forbidden:
-                        continue  # prohibición aplicable: ni manual ni gtfs
+                    if forbidden or (e.get("requires_rule") and not applied):
+                        continue  # prohibición o regla específica que no aplica
                     # un min_transfer_time aplicable eleva el mínimo sea
                     # cual sea el tipo de enlace (regla oficial > catálogo)
                     slack = max(e["slack"], min_s or 0)
@@ -555,8 +591,10 @@ def find_transfers(f_pairs, t_pairs, day, t0, span, is_today, limit=RESULT_LIMIT
             tid2 = r2["trip_id"]
             if cancelled(f2, tid2):
                 continue
-            forbidden, _ = _rule_for(origin_rules.get((f_o, s_o), []), y, None, None, r2["route_id"], tid2)
-            if forbidden:
+            forbidden, _, applied = _rule_for(
+                origin_rules.get((f_o, s_o), []), y, None, None, r2["route_id"], tid2
+            )
+            if forbidden or (e.get("requires_rule") and not applied):
                 continue
             dep2 = midnight + r2["dep_eff"]
             dep2_est, d2d = est(f2, tid2, y, dep2)

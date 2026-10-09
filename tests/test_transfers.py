@@ -206,7 +206,13 @@ def test_gtfs_type3_forbids_even_with_manual_edge(client, scenario):
         # prohibición route-scoped para el T1 del fixture
         _gt(c, "('cer','17000','17000','10T0013C4a','','','',3,NULL)")
     j = plan(client, **{"from": "cer:18000", "to": "cer:15211"}, date=str(D1))
-    assert all((i["leg2"] or {}).get("trip_id") != "MAD_C2_0900" for i in j["transfers"])
+    assert all(
+        not (
+            (i["leg1"] or {}).get("trip_id") == "MAD_C4B_0755"
+            and (i["leg2"] or {}).get("trip_id") == "MAD_C2_0900"
+        )
+        for i in j["transfers"]
+    ), "la prohibición aplica a ese T1; otro T1 sí puede usar el enlace"
 
 
 def test_gtfs_precedence_route_beats_stop(client, scenario):
@@ -260,16 +266,21 @@ def test_prohibition_is_scoped_to_to_stop(client, scenario):
         _gt(c, "('cer','17000','18000','','','','',2,480)")
         _gt(c, "('cer','17000','15410','','','','',0,NULL)")
         _gt(c, "('cer','17000','18000','10T0013C4a','','','',3,NULL)")
-    # 17000->18000 prohibido para el T1 (regla route-scoped): sin MAD_C5
+    # 17000->18000 prohibido para el T1 C4a (regla route-scoped); el otro
+    # T1 (ruta 10T0099C4A) sí puede usar el enlace autorizado a nivel parada
     j = plan(client, **{"from": "cer:18000", "to": "cer:10000"}, date=str(D1))
     assert all(
-        (i["leg2"] or {}).get("trip_id") != "MAD_C5_0930" for i in j["transfers"]
-    ), "la prohibición route-scoped a 18000 debe cerrar ese enlace"
+        not (
+            (i["leg1"] or {}).get("trip_id") == "MAD_C4B_0755"
+            and (i["leg2"] or {}).get("trip_id") == "MAD_C5_0930"
+        )
+        for i in j["transfers"]
+    ), "la prohibición route-scoped a 18000 cierra el enlace para ese T1"
     # pero 17000->15410 sigue abierto para el mismo T1
     j = plan(client, **{"from": "cer:18000", "to": "cer:99998"}, date=str(D1))
-    assert any(
-        (i["leg2"] or {}).get("trip_id") == "MAD_C9_0935" for i in j["transfers"]
-    ), "la prohibición X->18000 no debe contaminar X->15410"
+    assert any((i["leg2"] or {}).get("trip_id") == "MAD_C9_0935" for i in j["transfers"]), (
+        "la prohibición X->18000 no debe contaminar X->15410"
+    )
 
 
 def test_walk_origin_respects_requested_time(client):
@@ -332,3 +343,48 @@ def test_order_and_names_on_full_page(client, scenario):
     assert all(i["transfer"]["to_name"] for i in xs), "todos con nombre"
     # el más rápido es el que llega antes, no el primero generado
     assert xs[0]["arr_epoch"] == min(arrs)
+
+
+def test_qualified_rule_only_authorizes_its_route(client, scenario):
+    """Dos T1 que comparten la parada X pero llevan rutas distintas: una
+    transferencia GTFS autorizada solo para la ruta R1 habilita el enlace
+    para ese T1 y no para el otro."""
+    with scenario.begin() as c:
+        _gt(c, "('cer','17000','18000','10T0013C4a','','','',2,480)")
+    j = plan(client, **{"from": "cer:18000", "to": "cer:10000"}, date=str(D1))
+    via = [
+        (i["leg1"]["trip_id"], i["leg2"]["trip_id"])
+        for i in j["transfers"]
+        if (i["leg2"] or {}).get("trip_id") == "MAD_C5_0930"
+    ]
+    assert ("MAD_C4B_0755", "MAD_C5_0930") in via
+    assert ("MAD_C7_0800", "MAD_C5_0930") not in via, (
+        "la regla solo autoriza el enlace para la ruta 10T0013C4a"
+    )
+
+
+def test_qualified_min_does_not_contaminate_others(client, scenario):
+    """Un min_transfer_time restringido a otra ruta no eleva el slack del
+    enlace para T1 de rutas ajenas: la regla de parada (480 s) sigue."""
+    with scenario.begin() as c:
+        _gt(c, "('cer','17000','18000','','','','',2,480)")  # parada
+        _gt(c, "('cer','17000','18000','10T0013C4a','','','',2,4800)")  # ruta
+    j = plan(client, **{"from": "cer:18000", "to": "cer:10000"}, date=str(D1))
+    c4b = [
+        i
+        for i in j["transfers"]
+        if (i["leg1"] or {}).get("trip_id") == "MAD_C4B_0755"
+        and (i["leg2"] or {}).get("trip_id") == "MAD_C5_0930"
+    ]
+    c7 = [
+        i
+        for i in j["transfers"]
+        if (i["leg1"] or {}).get("trip_id") == "MAD_C7_0800"
+        and (i["leg2"] or {}).get("trip_id") == "MAD_C5_0930"
+    ]
+    # buffer 75 min: cumple 480 s de la regla de parada, incumple el
+    # mínimo de 80 min que la regla route-scoped exige solo a la C4a
+    assert not c4b, "la regla de ruta exige 60 min al T1 de esa ruta"
+    assert c7 and c7[0]["transfer"]["slack_sec"] == 480, (
+        "para otra ruta rige el mínimo de parada, no el de la ajena"
+    )

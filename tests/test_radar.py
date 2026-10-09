@@ -175,3 +175,34 @@ def test_ext_stale_flag(client, scenario):
 def test_ext_absent_for_cer_and_without_row(client):
     r = client.get("/api/v1/trains/cer/MAD_C1_0600")
     assert r.status_code == 200 and r.json()["ext"] is None
+
+
+def test_service_date_by_coverage_yesterday(scenario, radar_mod, monkeypatch):
+    """Un tren cuyo número solo cubre AYER en service_days (p.ej. nocturno
+    aún en circulación pasada medianoche) se ancla a esa fecha, no a hoy."""
+    from datetime import timedelta
+
+    from dbfix import TODAY
+
+    with scenario.begin() as c:
+        c.execute(
+            text(
+                "INSERT INTO trips (feed,trip_id,route_id,service_id,train_number)"
+                " VALUES('ld','LD_NOCHE','LD_AVE_MAD_BCN','S_Y1','77777')"
+            )
+        )
+        c.execute(text("INSERT INTO service_days VALUES('ld','S_Y1',:d)"), {"d": TODAY - timedelta(days=1)})
+    _patch_radar(monkeypatch, radar_mod, _fleet_payload([_train("77777")]))
+    radar_mod.poll_radar()
+    with scenario.connect() as c:
+        sd = c.execute(text("SELECT service_date FROM rt_ext_ld WHERE train_number='77777'")).scalar()
+        assert sd == TODAY - timedelta(days=1)
+
+
+def test_service_date_prefers_today(scenario, radar_mod, monkeypatch):
+    """Si el número cubre hoy Y ayer, gana hoy (instancia vigente)."""
+    _patch_radar(monkeypatch, radar_mod, _fleet_payload([_train("03100")]))
+    radar_mod.poll_radar()
+    with scenario.connect() as c:
+        sd = c.execute(text("SELECT service_date FROM rt_ext_ld WHERE train_number='03100'")).scalar()
+        assert sd == TODAY
