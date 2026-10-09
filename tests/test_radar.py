@@ -97,8 +97,14 @@ def test_writes_rows_and_identity(scenario, radar_mod, monkeypatch):
         assert [x[0] for x in r] == ["03100", "99999"]
         assert r[0][2] == "7" and r[0][6] == "AVE" and r[0][7] == "radar"
         # conciliación: solo 03100 casa con (train_number, service_date)
+        src = {r[0]: r[1] for r in c.execute(text("SELECT train_number, identity_src FROM rt_ext_ld")).all()}
+        # 03100 cubre varios días -> instancia ambigua marcada, no "verificada"
+        assert src["03100"] == "coverage_multi"
+        assert src["99999"] == "civil"  # el número no existe en nuestro GTFS
         stats = json.loads(c.execute(text("SELECT value FROM meta WHERE key='radar_stats'")).scalar())
         assert stats["provider_rows"] == 2 and stats["matched"] == 1
+        assert stats["identity_src"]["coverage_multi"] == 1
+        assert stats["identity_src"]["civil"] == 1
 
 
 def test_dedup_updates_in_place(scenario, radar_mod, monkeypatch):
@@ -180,10 +186,6 @@ def test_ext_absent_for_cer_and_without_row(client):
 def test_service_date_by_coverage_yesterday(scenario, radar_mod, monkeypatch):
     """Un tren cuyo número solo cubre AYER en service_days (p.ej. nocturno
     aún en circulación pasada medianoche) se ancla a esa fecha, no a hoy."""
-    from datetime import timedelta
-
-    from dbfix import TODAY
-
     with scenario.begin() as c:
         c.execute(
             text(
@@ -197,12 +199,23 @@ def test_service_date_by_coverage_yesterday(scenario, radar_mod, monkeypatch):
     with scenario.connect() as c:
         sd = c.execute(text("SELECT service_date FROM rt_ext_ld WHERE train_number='77777'")).scalar()
         assert sd == TODAY - timedelta(days=1)
+        # única coincidencia verificable -> marcado como 'coverage'
+        assert (
+            c.execute(text("SELECT identity_src FROM rt_ext_ld WHERE train_number='77777'")).scalar()
+            == "coverage"
+        )
 
 
 def test_service_date_prefers_today(scenario, radar_mod, monkeypatch):
-    """Si el número cubre hoy Y ayer, gana hoy (instancia vigente)."""
+    """Si el número cubre hoy Y ayer, gana hoy (instancia vigente); la
+    identidad multi-día queda marcada como ambigua, nunca 'verificada'."""
     _patch_radar(monkeypatch, radar_mod, _fleet_payload([_train("03100")]))
     radar_mod.poll_radar()
     with scenario.connect() as c:
         sd = c.execute(text("SELECT service_date FROM rt_ext_ld WHERE train_number='03100'")).scalar()
         assert sd == TODAY
+        # el fixture cubre todos los días: identidad multi-día, marcada
+        assert (
+            c.execute(text("SELECT identity_src FROM rt_ext_ld WHERE train_number='03100'")).scalar()
+            == "coverage_multi"
+        )

@@ -83,6 +83,7 @@ def _migrate(c):
     migrate_push_v2(c)
     # catálogo curado de enlaces de transbordo entre estaciones (idempotente;
     # create_all ya ha creado la tabla en este arranque)
+    _add_column(c, "rt_ext_ld", "identity_src", "VARCHAR(16)")
     from collector.transfer_links import seed_transfer_links
     seed_transfer_links(c)
 

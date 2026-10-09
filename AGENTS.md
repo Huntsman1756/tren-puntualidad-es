@@ -35,6 +35,9 @@
 - Estadísticas: `/api/v1/stats/*` solo con `STATS_PUBLIC=1`. Días representativos según
   `capture_health` + `sched_capture` (ver stats.py `REPRESENTATIVITY`).
 - E2E navegador (escritorio + móvil): `cd e2e && BASE=<url web> node v034.mjs`.
+  BROWSER=chromium|firefox|webkit; `node proxy.mjs` da same-origin local.
+- Los 7 skips de la suite son tests/test_integration_api.py: necesitan una
+  API real corriendo en :8000 (integración viva, no TestClient).
 - Identidad de líneas: `curl localhost:8000/api/v1/lineas-audit` (route_id → núcleo, evidencia).
 - Incidencias: `curl localhost:8000/api/v1/incidencias/audit`.
 
