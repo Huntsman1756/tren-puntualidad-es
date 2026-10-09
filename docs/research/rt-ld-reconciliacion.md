@@ -49,3 +49,13 @@ como el RT usan el mismo formato. Lo que ocurre:
 
 Conclusión: el planificador es correcto casando por `trip_id`; el
 estado `unknown` es ausencia verificada, no fallo de unión.
+
+## Pendientes antes de RADAR_ENABLED=1 (nota 2026-10-09)
+
+1. `identity_src='coverage'` verifica unicidad de FECHA, no de instancia:
+   un mismo número comercial puede tener varias etapas el mismo día.
+   Antes de activar, exigir también unicidad de `trip_id` en
+   (train_number, service_date) o degradar a `coverage_multi`.
+2. Higiene: las ramas `release/vX.Y.Z` deben quedar inmutables una vez
+   publicado el tag — los mantenimientos van a rama nueva (`release/v0.3.12`
+   quedó con un commit extra; el tag es la referencia estable).
