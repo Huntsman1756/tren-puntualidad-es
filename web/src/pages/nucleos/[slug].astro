@@ -2,21 +2,24 @@
 import Base from '../../layouts/Base.astro';
 import IncidentCard from '../../components/IncidentCard.svelte';
 import SourceStatus from '../../components/SourceStatus.svelte';
+import IncidentSignals from '../../components/IncidentSignals.svelte';
 import { api } from '../../lib/api';
 import { fmtDelay } from '../../lib/format';
 
 const slug = Astro.params.slug || '';
-let n: any = null, agg: any = null, inc: any = null;
+let n: any = null, agg: any = null, inc: any = null, anom: any = null;
 try {
   n = await api.nucleo(slug);
 } catch (e: any) {
   if (e?.status === 404) return new Response(null, { status: 404, statusText: 'Not found' });
   throw e;
 }
-[agg, inc] = await Promise.all([
+[agg, inc, anom] = await Promise.all([
   api.delaysByLine({ nucleo: slug }).catch(() => null),
   api.incidencias({ nucleo: slug }).catch(() => null),
+  api.anomalias({ nucleo: slug }).catch(() => null),
 ]);
+const signals: any[] = anom?.items || [];
 const live = new Map((agg?.items || []).map((i: any) => [i.line.slug, i]));
 const lineAlerts = (inc?.items || []).filter((a: any) => a.relevance === 'line');
 ---
@@ -27,9 +30,17 @@ const lineAlerts = (inc?.items || []).filter((a: any) => a.relevance === 'line')
   <p class="muted">{n.operator} · {n.lines.length} líneas · {n.stations} estaciones con servicio en el horario vigente
     · <a href={`/mapa/${slug}`}>Ver mapa</a></p>
 
+  {signals.length > 0 && (
+    <section class="card" aria-labelledby="sig-h">
+      <h2 id="sig-h">Posibles incidencias ahora</h2>
+      <IncidentSignals items={signals} />
+      <p class="muted small">Inferidas de los retrasos informados en tiempo real; no son avisos oficiales de Renfe.</p>
+    </section>
+  )}
+
   <section class="card">
     <h2>Líneas</h2>
-    <table class="board">
+    <div class="tbl-wrap"><table class="board">
       <thead><tr><th>Línea</th><th>Ahora</th><th class="hide-sm">Cobertura RT</th></tr></thead>
       <tbody>
         {n.lines.map((l: any) => {
@@ -57,7 +68,7 @@ const lineAlerts = (inc?.items || []).filter((a: any) => a.relevance === 'line')
           );
         })}
       </tbody>
-    </table>
+    </table></div>
     <p class="muted small">Foto en vivo del retraso informado por Renfe, no puntualidad
       histórica. Cobertura = trenes con dato en tiempo real / trenes que según el horario
       circulan ahora. <a href={`/retrasos?nucleo=${slug}`}>Ver trenes uno a uno</a></p>

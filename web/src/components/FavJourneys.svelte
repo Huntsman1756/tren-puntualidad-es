@@ -134,16 +134,11 @@
   </div>
 {:else}
   <div class="favs-empty">
-    <div class="fav-head">
-      <h2>Tus trayectos</h2>
-      <div class="fav-tools">
-        <label class="tool">Importar
-          <input type="file" accept="application/json" class="sr-only" on:change={doImport} />
-        </label>
-      </div>
-    </div>
-    <p class="muted">Aún no hay trayectos guardados. Busca un trayecto y pulsa
-      «Guardar trayecto» para tenerlo aquí cada vez que entres.</p>
+    <p class="muted">Guarda tus trayectos habituales para verlos aquí.
+      <label class="tool">Importar
+        <input type="file" accept="application/json" class="sr-only" on:change={doImport} />
+      </label>
+    </p>
   </div>
 {/if}
 
@@ -171,5 +166,7 @@
   .nt:first-child { border-top: 0; }
   .jops { display: flex; gap: .4rem; padding: .4rem .8rem .6rem; justify-content: flex-end; }
   .imp { font-size: .8rem; margin: .2rem 0 .5rem; }
-  .favs-empty p { margin: 0; }
+  .favs-empty p { margin: 0; font-size: .88rem; display: flex; flex-wrap: wrap;
+                  align-items: center; gap: .5rem; }
+  .favs-empty .tool { padding: .15rem .5rem; }
 </style>

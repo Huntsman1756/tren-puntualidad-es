@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.8] — 2026-10-09
+### Incidencias cuando el feed oficial no se actualiza
+- Verificado: el feed GTFS-RT de avisos de Renfe (y el del visor) no cambia
+  desde el 07/10 09:32, mientras Renfe publica incidencias en WhatsApp/X (sin
+  datos abiertos). `/incidencias` informa ahora `content_stale` y la web lo
+  avisa con enlaces a los canales oficiales.
+- Nuevo `/api/v1/anomalias`: **posibles incidencias inferidas** de retrasos en
+  tiempo real por línea (≥3 trenes con +15 min, o ≥2 y al menos la mitad de
+  los monitorizados), con evidencia (trenes, máximo, mediana) y avisos
+  oficiales asociados. Siempre etiquetadas como inferidas, nunca como aviso
+  oficial. Detectó en vivo la avería de Parla (C4) y la de Zarzaquemada (C5)
+  del 09/10.
+### Frontend
+- Portada: «Ahora en tu red» (posibles incidencias compactas, aviso de feed
+  congelado), trayectos guardados antes, planificador más compacto, chips de
+  núcleo con leyenda.
+- Listas de retrasos con columnas fijas (antes el número de tren se desplazaba
+  según el nombre del núcleo) y tarjetas de dos líneas en móvil sin truncar el
+  destino. `/trayecto` con columnas alineadas.
+- Posibles incidencias también en núcleo, línea e incidencias; contraste,
+  foco visible, tablas con scroll en pantallas pequeñas.
+### QA
+- `e2e/xbrowser.mjs`: Chromium, Firefox y WebKit × escritorio, tableta y
+  móvil (Pixel 7, iPhone 13) sobre 17 páginas: errores, desbordes, solapes,
+  **columnas desalineadas** y textos truncados; autotest de los detectores con
+  páginas defectuosas (`--selftest`).
+
 ## [0.3.7] — 2026-10-09
 - Histórico: los retrasos implausibles (fuera de −60…+600 min, p. ej. el
   `retrasoMin = -1438` del visor en trenes que cruzan medianoche) ya no

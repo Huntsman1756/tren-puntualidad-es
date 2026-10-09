@@ -3,6 +3,7 @@ import Base from '../../../layouts/Base.astro';
 import IncidentCard from '../../../components/IncidentCard.svelte';
 import SourceStatus from '../../../components/SourceStatus.svelte';
 import LineBadge from '../../../components/LineBadge.svelte';
+import IncidentSignals from '../../../components/IncidentSignals.svelte';
 import { api } from '../../../lib/api';
 import { fmtDelay, fmtTime } from '../../../lib/format';
 
@@ -16,7 +17,11 @@ try {
   if (e?.status === 404) return new Response(null, { status: 404, statusText: 'Not found' });
   throw e;
 }
-const inc = await api.incidencias({ nucleo, linea }).catch(() => null);
+const [inc, anom] = await Promise.all([
+  api.incidencias({ nucleo, linea }).catch(() => null),
+  api.anomalias({ nucleo, linea }).catch(() => null),
+]);
+const signals: any[] = anom?.items || [];
 const lineAlerts = (inc?.items || []).filter((a: any) => a.relevance === 'line');
 const stAlerts = (inc?.items || []).filter((a: any) => a.relevance !== 'line');
 const dq = new URLSearchParams();
@@ -49,6 +54,7 @@ const fam = L.family;
 
   <section class="card">
     <h2>Incidencias</h2>
+    {signals.length > 0 && <div class="sig-top"><IncidentSignals items={signals} /></div>}
     {inc && <SourceStatus source={inc.source} count={inc.total} />}
     {lineAlerts.map((a: any) => <IncidentCard a={a} context="line" />)}
     {stAlerts.length > 0 && (
@@ -65,7 +71,7 @@ const fam = L.family;
       ? <p class="muted">Ningún tren de esta línea con dato en tiempo real ahora mismo.
           No implica que no circulen trenes: Renfe no informa de todos.</p>
       : (
-        <table class="board">
+        <div class="tbl-wrap"><table class="board">
           <thead><tr><th>Tren</th><th>Destino</th><th>Próx. parada</th><th>Estado</th></tr></thead>
           <tbody>
             {L.live.map((t: any) => {
@@ -82,7 +88,7 @@ const fam = L.family;
               );
             })}
           </tbody>
-        </table>
+        </table></div>
       )}
   </section>
 
@@ -148,5 +154,6 @@ const fam = L.family;
   .audit summary { cursor: pointer; font-weight: 600; }
   code { font-size: .8rem; }
   .tid { display: inline-block; max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+  .sig-top { margin-bottom: .4rem; }
   @media (max-width: 560px) { .all { columns: 1; } }
 </style>

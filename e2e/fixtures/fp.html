@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>fixture falsos positivos</title>
+<style>
+  body { font: 14px sans-serif; margin: 8px; }
+  /* 1. chips en contenedor flex con wrap: se envuelven en varias líneas */
+  .nucs { display: flex; flex-wrap: wrap; width: 200px; gap: 6px; }
+  .nuc { background: #ddd; padding: 2px 6px; }
+  /* 2. tarjetas apiladas en bloque con contenido distinto (título + párrafo) */
+  main > section.card { margin-bottom: 10px; }
+  main > section.card h2 { margin: 0; }
+  main > section.card:nth-child(2) h2 { margin-left: 3px; }
+  main > section.card:nth-child(3) p { padding-left: 6px; }
+  /* 3. elementos de prosa: la primera línea empieza con <strong>/<code>/<a> */
+  .prose li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <div class="nucs">
+      <a class="nuc sig" href="#">Madrid Cercanías</a>
+      <a class="nuc sig" href="#">Murcia</a>
+      <a class="nuc sig" href="#">Alicante Sur Ciudad Larga</a>
+    </div>
+  </section>
+  <section class="card"><h2>Asturias</h2><p>Texto corto de la tarjeta.</p></section>
+  <section class="card"><h2>Cataluña</h2><p>Otro texto un poco más largo para la tarjeta.</p></section>
+  <section class="card"><h2>Valencia</h2><p>Un tercer texto.</p></section>
+</main>
+<div class="card prose">
+  <ul>
+    <li><strong>Fuente:</strong> datos oficiales del operador con texto corrido que sigue en la misma línea.</li>
+    <li><code>GTFS</code> incluye horarios programados y muchas más explicaciones en prosa.</li>
+    <li><a href="#">Enlace</a> seguido de un párrafo de texto más largo que ocupa varias líneas.</li>
+    <li><strong>Nota:</strong> otro elemento con prosa para comprobar que no se compara como fila.</li>
+  </ul>
+</div>
+</body>
+</html>

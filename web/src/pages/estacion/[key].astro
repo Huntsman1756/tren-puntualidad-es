@@ -72,7 +72,7 @@ const elsewhere = (inc?.items || []).filter((a: any) => a.relevance === 'line_ot
       {elsewhere.map((a: any) => <IncidentCard a={a} context="station" compact />)}
     </details>
   )}
-  {inc && infos.some((i) => i.feed === 'cer') && here.length === 0 &&
+  {inc && infos.some((i) => i.feed === 'cer') && (here.length === 0 || inc.source?.content_stale) &&
     <SourceStatus source={inc.source} count={0} />}
 
   <DateBar action={`/estacion/${key}`} date={date || today} time={time} max={maxDate} />

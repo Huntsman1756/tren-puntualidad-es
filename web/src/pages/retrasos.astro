@@ -70,7 +70,7 @@ const where = nuc ? (linea ? ` · ${linea.toUpperCase()} ${nuc.name}` : ` · ${n
             Renfe no publica dato en tiempo real de todos los trenes: consulta la
             <a href={qs({ vista: 'lineas' })}>cobertura por línea</a>.</p>
         : (
-        <table class="board">
+        <div class="tbl-wrap"><table class="board">
           <thead><tr><th>Línea</th><th>Tren</th><th class="hide-sm">Destino</th><th>Próxima parada</th><th>Retraso</th></tr></thead>
           <tbody>
             {items.map((r: any) => {
@@ -86,14 +86,14 @@ const where = nuc ? (linea ? ` · ${linea.toUpperCase()} ${nuc.name}` : ` · ${n
               );
             })}
           </tbody>
-        </table>
+        </table></div>
       )}
     </div>
   )}
 
   {vista === 'lineas' && agg && (
     <div class="card">
-      <table class="board">
+      <div class="tbl-wrap"><table class="board">
         <thead><tr><th>Línea</th><th>Con retraso ≥{Math.round(agg.min_delay / 60)} min</th><th>Retraso máx.</th><th>Cobertura</th></tr></thead>
         <tbody>
           {agg.items.filter((i: any) => i.scheduled_now > 0 || i.monitored > 0).map((i: any) => {
@@ -110,7 +110,7 @@ const where = nuc ? (linea ? ` · ${linea.toUpperCase()} ${nuc.name}` : ` · ${n
             );
           })}
         </tbody>
-      </table>
+      </table></div>
       <p class="muted small">{agg.note} Actualizado {ageText(agg.generated_at)}.
         Solo Cercanías/Rodalies (AV/LD no se organiza por núcleos).</p>
     </div>

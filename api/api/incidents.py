@@ -18,12 +18,14 @@ Principios:
 import re
 import time
 import unicodedata
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
 from api.common import (
     NUCLEO_BY_SLUG,
+    TZ,
     line_from_route_id_format,
     line_info,
     line_routes,
@@ -36,6 +38,17 @@ router = APIRouter(prefix="/api/v1")
 FEED_URLS = {"cer": "https://gtfsrt.renfe.com/alerts.json"}
 FETCH_OK_MAX_AGE = 300        # sondeo cada 60 s: 5 min sin éxito = problema
 RECENT_DAYS = 7
+# contenido del feed oficial sin cambios desde hace más de 6 h = obsoleto
+CONTENT_STALE_SEC = 21600
+# Renfe publica incidencias de última hora en estos canales (sin datos abiertos)
+OFFICIAL_CHANNELS = [
+    {"name": "Canal de WhatsApp de Cercanías (Renfe)",
+     "url": "https://www.renfe.com/es/es/ayuda/suscripcion-avisos-whatsapp"},
+    {"name": "X / Twitter @CercaniasMadrid",
+     "url": "https://x.com/CercaniasMadrid"},
+    {"name": "Avisos de Renfe (sala de prensa)",
+     "url": "https://grupo.renfe.com/es/es/sala-de-prensa/avisos"},
+]
 
 CAUSE_ES = {
     "UNKNOWN_CAUSE": "causa desconocida", "OTHER_CAUSE": "otra causa",
@@ -370,9 +383,32 @@ def source_health(feed: str, now: int | None = None) -> dict:
     else:
         status = "stale"
         msg = "Sin descargas recientes de la fuente: datos posiblemente antiguos."
+    # frescura del CONTENIDO (header del feed), distinta de la última descarga:
+    # Renfe puede dejar de actualizar su feed aunque la descarga responda
+    content_age = now - feed_ts if feed_ts is not None else None
+    content_stale = (status == "ok" and content_age is not None
+                     and content_age > CONTENT_STALE_SEC)
+    if content_stale:
+        when = datetime.fromtimestamp(feed_ts, TZ).strftime("%d/%m %H:%M")
+        msg = (f"Renfe no actualiza su feed oficial de avisos desde hace "
+               f"{_human_age(content_age)} ({when}). Las incidencias de última "
+               "hora que Renfe publica en sus canales de WhatsApp/X no tienen "
+               "datos abiertos y pueden no aparecer aquí.")
     return {"feed": feed, "status": status, "message": msg,
             "last_ok": ok, "last_error": err, "feed_ts": feed_ts,
+            "content_ts": feed_ts, "content_age_sec": content_age,
+            "content_stale": content_stale,
+            "official_channels": OFFICIAL_CHANNELS,
             "published": count, "feed_url": FEED_URLS[feed]}
+
+
+def _human_age(sec: int) -> str:
+    """Edad en horas (<48 h) o días, en español."""
+    h = sec // 3600
+    if h < 48:
+        return "1 hora" if h == 1 else f"{h} horas"
+    d = h // 24
+    return "1 día" if d == 1 else f"{d} días"
 
 
 # ---------- consulta ----------

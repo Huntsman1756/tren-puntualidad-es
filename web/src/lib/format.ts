@@ -39,3 +39,14 @@ export const FEED_NAME: Record<string, string> = {
   cer: 'Cercanías / Rodalies',
   ld: 'AV · LD · MD',
 };
+
+/** "dd/mm HH:MM" en Europe/Madrid (fecha de contenido de un feed). */
+export function fmtStamp(epoch?: number | null): string {
+  if (!epoch) return '—';
+  const parts = new Intl.DateTimeFormat('es-ES', {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    hourCycle: 'h23', timeZone: 'Europe/Madrid',
+  }).formatToParts(new Date(epoch * 1000));
+  const g = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  return `${g('day')}/${g('month')} ${g('hour')}:${g('minute')}`;
+}

@@ -2,6 +2,7 @@
 import Base from '../layouts/Base.astro';
 import IncidentCard from '../components/IncidentCard.svelte';
 import SourceStatus from '../components/SourceStatus.svelte';
+import IncidentSignals from '../components/IncidentSignals.svelte';
 import { api } from '../lib/api';
 
 const sp = Astro.url.searchParams;
@@ -14,19 +15,24 @@ const f = {
 };
 let data: any = null;
 let nucleos: any[] = [];
+let anom: any = null;
 let error: string | null = null;
 let stationName = '';
+const lineaFiltro = f.nucleo && f.linea ? f.linea : undefined;
 try {
-  [data, nucleos] = await Promise.all([
+  [data, nucleos, anom] = await Promise.all([
     api.incidencias({
       nucleo: f.nucleo || undefined,
-      linea: f.nucleo && f.linea ? f.linea : undefined,
+      linea: lineaFiltro,
       estacion: f.estacion || undefined,
       categoria: f.categoria || undefined,
       periodo: f.periodo,
     }),
     api.nucleos().catch(() => []),
+    // Señales inferidas: si fallan, la sección simplemente no aparece.
+    api.anomalias({ nucleo: f.nucleo || undefined, linea: lineaFiltro }).catch(() => null),
   ]);
+  anom = anom?.items?.length ? anom : null;
   if (f.estacion) {
     const [fe, st] = f.estacion.split(',')[0].split(':');
     stationName = await api.station(fe, st).then((s: any) => s.name).catch(() => st);
@@ -96,6 +102,15 @@ const scopeTitle = f.estacion ? `en ${stationName}`
       <a href="/incidencias" class="reset">Quitar filtros</a>}
   </form>
 
+  {anom && !f.estacion && (
+    <section class="card" aria-labelledby="inf-h">
+      <h2 id="inf-h">Posibles incidencias inferidas</h2>
+      <p class="muted note">Calculadas a partir de los retrasos informados en tiempo real.
+        No son avisos oficiales de Renfe.</p>
+      <IncidentSignals items={anom.items} />
+    </section>
+  )}
+
   {error && <div class="card alert" role="alert">{error}</div>}
   {data && (
     <>
@@ -130,5 +145,7 @@ const scopeTitle = f.estacion ? `en ${stationName}`
                     color: var(--accent-fg); font-weight: 600; cursor: pointer; min-height: 40px; }
   .reset { align-self: center; font-size: .85rem; }
   .counts { font-size: .82rem; display: flex; gap: .5rem; flex-wrap: wrap; }
-  .small { font-size: .75rem; margin-top: 1.5rem; }
+  .small { font-size: .78rem; margin-top: 1.5rem; }
+  h2 { font-size: 1rem; margin: 0 0 .3rem; }
+  .note { font-size: .82rem; margin: 0 0 .5rem; }
 </style>

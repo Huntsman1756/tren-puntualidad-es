@@ -214,3 +214,25 @@ def test_route_ids_missing_from_gtfs_resolved_by_format(client, scenario):
     assert a["lines"][0]["label"] == "R1 · Rodalies de Catalunya"
     assert a["lines"][0]["status"] == "route_id_format"
     assert a["nucleos"][0]["slug"] == "rodalies-catalunya"
+
+
+@pytest.mark.integration
+def test_source_health_flags_stale_official_content(scenario):
+    from api.incidents import source_health
+    now = int(time.time())
+    _load(scenario, [], ok_ts=now - 60)
+    with scenario.begin() as c:   # feed oficial con header de hace 30 h
+        c.execute(text("INSERT INTO meta VALUES ('rt_alerts_cer', :v) ON CONFLICT (key)"
+                       " DO UPDATE SET value=EXCLUDED.value"),
+                  {"v": str(now - 30 * 3600)})
+    s = source_health("cer", now)
+    assert s["status"] == "ok" and s["content_stale"] is True
+    assert s["content_age_sec"] == 30 * 3600
+    assert "WhatsApp" in s["message"] and "desde hace 30 horas" in s["message"]
+    assert s["official_channels"][0]["name"].startswith("Canal de WhatsApp")
+    with scenario.begin() as c:   # contenido reciente: sin aviso de obsolescencia
+        c.execute(text("UPDATE meta SET value=:v WHERE key='rt_alerts_cer'"),
+                  {"v": str(now - 3600)})
+    s = source_health("cer", now)
+    assert s["content_stale"] is False and s["content_age_sec"] == 3600
+    assert "WhatsApp" not in s["message"]

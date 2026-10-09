@@ -273,6 +273,24 @@ def live_trains(nucleo=None, linea=None, feed=None, min_delay=60,
     return out
 
 
+def scheduled_now_by_route(c, rids, day, secs) -> dict:
+    """Circulaciones que, según el horario de `day`, deberían estar en marcha
+    a `secs` (primera salida ≤ ahora ≤ última llegada), por route_id."""
+    if not rids:
+        return {}
+    rows = c.execute(text("""
+        SELECT t.route_id, count(*) FROM trip_span ts
+        JOIN trips t ON t.feed=ts.feed AND t.trip_id=ts.trip_id
+        JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id
+             AND sd.day BETWEEN CAST(:day AS date) - 1 AND CAST(:day AS date)
+        WHERE ts.feed='cer' AND t.route_id = ANY(:r)
+          AND ts.first_dep + (sd.day - CAST(:day AS date)) * 86400 <= :s
+          AND ts.last_arr + (sd.day - CAST(:day AS date)) * 86400 >= :s
+        GROUP BY t.route_id"""),
+        {"r": sorted(rids), "day": day, "s": secs}).all()
+    return {rid: n for rid, n in rows}
+
+
 @router.get("/delays/lines")
 def delays_by_line(nucleo: str | None = None,
                    min_delay: int = Query(180, ge=60, le=3600)):
@@ -296,16 +314,7 @@ def delays_by_line(nucleo: str | None = None,
                 "semantics": "snapshot_reported_delay"}
     rids = sorted(lr)
     with engine.connect() as c:
-        sched = c.execute(text("""
-            SELECT t.route_id, count(*) FROM trip_span ts
-            JOIN trips t ON t.feed=ts.feed AND t.trip_id=ts.trip_id
-            JOIN service_days sd ON sd.feed=t.feed AND sd.service_id=t.service_id
-                 AND sd.day BETWEEN CAST(:day AS date) - 1 AND CAST(:day AS date)
-            WHERE ts.feed='cer' AND t.route_id = ANY(:r)
-              AND ts.first_dep + (sd.day - CAST(:day AS date)) * 86400 <= :s
-              AND ts.last_arr + (sd.day - CAST(:day AS date)) * 86400 >= :s
-            GROUP BY t.route_id"""),
-            {"r": rids, "day": today, "s": secs}).all()
+        sched = scheduled_now_by_route(c, rids, today, secs)
         live = c.execute(text(f"""
             SELECT t.route_id, ({EFF_DELAY_SQL}) AS delay
             FROM rt_trip rt
@@ -328,7 +337,7 @@ def delays_by_line(nucleo: str | None = None,
             "scheduled_now": 0, "monitored": 0, "delayed": 0,
             "max_delay_sec": None})
 
-    for rid, n in sched:
+    for rid, n in sched.items():
         bucket(rid)["scheduled_now"] += n
         if lr[rid]["mode"] == "tren" and lr[rid]["color"]:
             bucket(rid)["line"]["color"] = bucket(rid)["line"]["color"] or lr[rid]["color"]

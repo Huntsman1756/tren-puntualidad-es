@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>fixture good</title>
+<style>
+  body { font: 14px sans-serif; margin: 8px; }
+  /* misma lista, con rejilla: cada columna tiene ancho fijo y compartido */
+  a.rk { display: grid; grid-template-columns: 130px 70px 1fr; align-items: center; padding: 4px 0; text-decoration: none; }
+  .badge { background: #ccc; padding: 2px 4px; white-space: nowrap; justify-self: start; }
+  .rknum { margin: 0 8px; }
+  .rkdest { min-width: 0; }
+  table { width: 300px; table-layout: fixed; border-collapse: collapse; margin-top: 12px; }
+  td { overflow: visible; border: 1px solid #888; }
+  .row { display: flex; margin-top: 12px; }
+  .row span { background: #fcc; padding: 2px 4px; }
+  .row span + span { background: #cfc; }
+</style>
+</head>
+<body>
+<h1>Fixture bueno</h1>
+<div class="rank">
+  <a class="rk" href="#"><span class="badge">Madrid</span><span class="rknum">C1 12345</span><span class="rkdest">Alcobendas-San Sebastián de los Reyes</span></a>
+  <a class="rk" href="#"><span class="badge">Murcia/Alicante</span><span class="rknum">MD 6789</span><span class="rkdest">Murcia del Carmen</span></a>
+  <a class="rk" href="#"><span class="badge">Cercanías Málaga</span><span class="rknum">C2 555</span><span class="rkdest">Fuengirola</span></a>
+  <a class="rk" href="#"><span class="badge">C1</span><span class="rknum">C1 42</span><span class="rkdest">Atocha Cercanías</span></a>
+</div>
+<table><tr><td>Texto demasiado largo para la celda fija</td></tr></table>
+<div class="row"><span>Uno</span><span>Dos</span></div>
+</body>
+</html>

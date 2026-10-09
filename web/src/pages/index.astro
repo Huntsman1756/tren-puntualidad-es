@@ -2,44 +2,82 @@
 import Base from '../layouts/Base.astro';
 import Planner from '../components/Planner.svelte';
 import FavJourneys from '../components/FavJourneys.svelte';
-import LineBadge from '../components/LineBadge.svelte';
+import RankList from '../components/RankList.svelte';
+import IncidentSignals from '../components/IncidentSignals.svelte';
+import SourceStatus from '../components/SourceStatus.svelte';
 import { api } from '../lib/api';
-import { fmtDelay, ageText } from '../lib/format';
+import { ageText } from '../lib/format';
 
 const date = Astro.url.searchParams.get('date') || '';
 const time = Astro.url.searchParams.get('time') || '';
-const [ranking, status, nucleos] = await Promise.all([
+// Cada fuente puede fallar por separado: su parte de la página se oculta.
+const [ranking, status, nucleos, anom, inc] = await Promise.all([
   api.ranking(6).catch(() => []),
   api.status().catch(() => null),
   api.nucleos().catch(() => []),
+  api.anomalias().catch(() => null),
+  api.incidencias({ periodo: 'vigentes' }).catch(() => null),
 ]);
 const rtC = status?.feeds?.rt_trip_updates_cer?.ts;
 const rtL = status?.feeds?.rt_trip_updates_ld?.ts;
+
+const signals: any[] = anom?.items || [];
+const sigBy = new Map<string, number>();
+for (const s of signals) {
+  const k = s.nucleo?.slug;
+  if (k) sigBy.set(k, (sigBy.get(k) || 0) + 1);
+}
+const slugOf = (n: any): string => n.slug || (n.url || '').split('/').filter(Boolean).pop() || '';
+const staleFeed = !!inc?.source?.content_stale;
+const showAhora = !!anom || staleFeed;
+const rtAge = anom?.rt_age_sec != null
+  ? ageText(Math.floor(Date.now() / 1000) - anom.rt_age_sec) : null;
 ---
 <Base>
   <section class="hero">
     <h1>Tu tren, sin complicaciones</h1>
-    <p class="muted">Salidas, llegadas, avisos y retrasos de Renfe — Cercanías, Rodalies,
-      AVE, Larga y Media Distancia — para hoy o cualquier día con horario publicado.</p>
+    <p class="muted">Salidas, llegadas y retrasos de Renfe en Cercanías, Rodalies, AV y Larga Distancia.</p>
   </section>
 
   <div class="card planner-card">
     <Planner client:load initialDate={date} initialTime={time} />
   </div>
 
-  <div class="card">
+  <div class="card tight">
     <FavJourneys client:load />
   </div>
+
+  {showAhora && (
+    <section class="card" aria-labelledby="ahora-h">
+      <h2 id="ahora-h">Ahora en tu red</h2>
+      {staleFeed && <SourceStatus source={inc.source} count={inc.total} compact />}
+      {anom && signals.length > 0 && <IncidentSignals items={signals} compact limit={4} />}
+      {anom && signals.length === 0 && (
+        <>
+          <p class="calm">Sin retrasos generalizados detectados ahora.</p>
+          <p class="muted small">Inferido de los retrasos informados en tiempo real
+            {anom.rt_fresh ? '' : ' (datos RT desfasados: el resultado puede no ser fiable)'}
+            {rtAge ? ` · datos RT ${rtAge}` : ''}.</p>
+        </>
+      )}
+    </section>
+  )}
 
   {nucleos.length > 0 && (
     <section class="card">
       <h2>Tu núcleo <a href="/nucleos">todos los núcleos</a></h2>
       <div class="nucs">
-        {nucleos.map((n: any) => (
-          <a class="nuc" href={n.url}>{n.name}
-            {n.alerts > 0 && <span class="al" title="Avisos oficiales publicados">⚠ {n.alerts}</span>}</a>
-        ))}
+        {nucleos.map((n: any) => {
+          const s = sigBy.get(slugOf(n)) || 0;
+          return (
+            <a class={`nuc${s > 0 ? ' sig' : ''}`} href={n.url}
+               aria-label={`${n.name}${s > 0 ? `, ${s} posibles incidencias inferidas` : ''}${n.alerts > 0 ? `, ${n.alerts} avisos oficiales` : ''}`}>{n.name}
+              {s > 0 && <span class="sigc" title={`${s} posibles incidencias inferidas (no son avisos oficiales)`} aria-hidden="true">▲ {s}</span>}
+              {n.alerts > 0 && <span class="al" title={`${n.alerts} avisos oficiales publicados`} aria-hidden="true">⚠ {n.alerts}</span>}</a>
+          );
+        })}
       </div>
+      <p class="legend muted">▲ posibles incidencias inferidas de retrasos · ⚠ avisos oficiales de Renfe</p>
       <p class="muted small"><a href="/incidencias">Incidencias oficiales</a> ·
         <a href="/lineas">Todas las líneas</a></p>
     </section>
@@ -53,48 +91,29 @@ const rtL = status?.feeds?.rt_trip_updates_ld?.ts;
   )}
 
   {ranking.length > 0 && (
-    <div class="card">
+    <section class="card">
       <h2>Mayores retrasos ahora <a href="/retrasos">ver por núcleo y línea</a></h2>
-      <div class="rank">
-        {ranking.map((r: any) => {
-          const d = fmtDelay(r.delay);
-          return (
-            <a class="rk" href={`/tren/${r.feed}/${encodeURIComponent(r.trip_id)}`}>
-              <LineBadge line={r.line_info} fallback={r.line || '—'} link={false} stack />
-              <span class="rknum">{r.train_number ? r.train_number : <span class="tid" title={r.trip_id}>{r.trip_id}</span>}</span>
-              <span class="rkdest">{r.destination || '—'}</span>
-              <span class={`badge ${d.cls}`}>
-                {d.text}{r.delay_source === 'observed' ? ' · obs.' : ''}</span>
-            </a>
-          );
-        })}
-      </div>
+      <RankList items={ranking} />
       <p class="muted small">Retraso informado ahora mismo; no es puntualidad histórica.</p>
-    </div>
+    </section>
   )}
 </Base>
 <style>
-  .hero { padding: .8rem 0 .2rem; }
-  .hero h1 { margin: 0 0 .3rem; font-size: 1.7rem; letter-spacing: -.02em; }
-  .hero p { margin: 0; }
-  .planner-card { border-color: var(--accent); border-width: 1px; }
-  h2 { margin: 0 0 .6rem; font-size: 1rem; display: flex; gap: .6rem; align-items: baseline; }
+  .hero { padding: .6rem 0 0; }
+  .hero h1 { margin: 0 0 .2rem; font-size: 1.5rem; letter-spacing: -.02em; }
+  .hero p { margin: 0; font-size: .95rem; }
+  .planner-card { border-color: var(--accent); margin-top: .7rem; }
+  h2 { display: flex; flex-wrap: wrap; gap: .2rem .6rem; align-items: baseline; }
   h2 a { font-size: .8rem; font-weight: 400; }
+  .calm { font-weight: 600; color: var(--ok); margin: 0 0 .2rem; }
   .nucs { display: flex; flex-wrap: wrap; gap: .4rem; }
   .nuc { border: 1px solid var(--border); border-radius: 999px; padding: .3rem .75rem;
-         font-size: .85rem; color: var(--text); min-height: 34px; display: inline-flex;
+         font-size: .85rem; color: var(--text); min-height: 36px; display: inline-flex;
          gap: .35rem; align-items: center; }
   .nuc:hover { border-color: var(--accent); }
+  .nuc.sig { border-color: var(--warn); background: var(--warn-bg); font-weight: 600; }
+  .sigc { color: var(--warn); font-size: .75rem; font-weight: 700; font-variant-numeric: tabular-nums; }
   .al { color: var(--warn); font-size: .75rem; }
-  .small { font-size: .78rem; margin: .5rem 0 0; }
   .fresh { font-size: .78rem; text-align: center; margin: .2rem 0 0; }
-  .rank { display: flex; flex-direction: column; }
-  .rk { display: flex; align-items: center; gap: .7rem; padding: .45rem .2rem;
-        border-top: 1px solid var(--border); color: var(--text); min-height: 44px; }
-  .rk:first-child { border-top: 0; }
-  .rknum { min-width: 4.5rem; max-width: 9rem; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .rknum .tid { max-width: 100%; }
-  .rk > :first-child { flex: 0 1 auto; min-width: 0; max-width: 40%; }
-  .rkdest { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-            color: var(--muted); }
+  .legend { font-size: .76rem; margin: .45rem 0 0; }
 </style>

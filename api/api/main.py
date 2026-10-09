@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from api.anomalies import router as anomalies_router
 from api.common import line_info, reset_caches
 from api.db import engine
 from api.incidents import query as incidents_query
@@ -1258,6 +1259,7 @@ if os.environ.get("STATS_PUBLIC") == "1":
 app.include_router(v1)
 app.include_router(lines_router)
 app.include_router(incidents_router)
+app.include_router(anomalies_router)
 app.include_router(push_router)
 app.include_router(map_router)
 

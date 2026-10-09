@@ -118,39 +118,41 @@
 
   <fieldset class="when">
     <legend class="sr-only">Fecha</legend>
-    <div class="chips" role="radiogroup" aria-label="Fecha">
-      <button type="button" role="radio" aria-checked={shortcut === 'today'}
-              class:on={shortcut === 'today' && !picking} on:click={() => setDay(today)}>Hoy</button>
-      <button type="button" role="radio" aria-checked={shortcut === 'tomorrow'}
-              class:on={shortcut === 'tomorrow' && !picking} on:click={() => setDay(tomorrow)}>Mañana</button>
-      <button type="button" role="radio" aria-checked={shortcut === 'weekend'}
-              class:on={shortcut === 'weekend' && !picking}
-              on:click={() => setDay(weekend)}
-              title={relDay(weekend, today)}>Fin de semana</button>
-      <button type="button" role="radio" aria-checked={shortcut === 'pick' || picking}
-              class:on={shortcut === 'pick' || picking} on:click={() => (picking = true)}>Elegir fecha</button>
-    </div>
-    <div class="row">
-      {#if picking || shortcut === 'pick'}
-        <div class="dt">
-          <label for="pdate">Fecha</label>
-          <input id="pdate" type="date" bind:value={date} min={today} max={maxDate}
-                 on:change={() => (time = '')} />
-        </div>
-      {/if}
-      {#if tab !== 'train'}
-        <div class="dt">
-          <label for="ptime">Hora <span class="muted">(opcional)</span></label>
-          <div class="tline">
-            <input id="ptime" type="time" bind:value={time} />
-            {#if time}<button type="button" class="link" on:click={() => (time = '')}>
-              {date === today ? 'Ahora' : 'Todo el día'}</button>{/if}
+    <div class="when-line">
+      <div class="chips" role="radiogroup" aria-label="Fecha">
+        <button type="button" role="radio" aria-checked={shortcut === 'today'}
+                class:on={shortcut === 'today' && !picking} on:click={() => setDay(today)}>Hoy</button>
+        <button type="button" role="radio" aria-checked={shortcut === 'tomorrow'}
+                class:on={shortcut === 'tomorrow' && !picking} on:click={() => setDay(tomorrow)}>Mañana</button>
+        <button type="button" role="radio" aria-checked={shortcut === 'weekend'}
+                class:on={shortcut === 'weekend' && !picking}
+                on:click={() => setDay(weekend)}
+                title={relDay(weekend, today)}>Fin de semana</button>
+        <button type="button" role="radio" aria-checked={shortcut === 'pick' || picking}
+                class:on={shortcut === 'pick' || picking} on:click={() => (picking = true)}>Elegir fecha</button>
+      </div>
+      <div class="row">
+        {#if picking || shortcut === 'pick'}
+          <div class="dt">
+            <label for="pdate">Fecha</label>
+            <input id="pdate" type="date" bind:value={date} min={today} max={maxDate}
+                   on:change={() => (time = '')} />
           </div>
-        </div>
-      {/if}
-      {#if tab === 'journey'}
-        <label class="chk"><input type="checkbox" bind:checked={semidirect} /> Solo semidirectos</label>
-      {/if}
+        {/if}
+        {#if tab !== 'train'}
+          <div class="dt">
+            <label for="ptime">Hora <span class="muted">(opcional)</span></label>
+            <div class="tline">
+              <input id="ptime" type="time" bind:value={time} />
+              {#if time}<button type="button" class="link" on:click={() => (time = '')}>
+                {date === today ? 'Ahora' : 'Todo el día'}</button>{/if}
+            </div>
+          </div>
+        {/if}
+        {#if tab === 'journey'}
+          <label class="chk"><input type="checkbox" bind:checked={semidirect} /> Solo semidirectos</label>
+        {/if}
+      </div>
     </div>
     <p class="when-sum muted" aria-live="polite">
       {relDay(date, today)} · {tab === 'train' ? 'instancia del día elegido' : timeHint}
@@ -172,7 +174,7 @@
 </div>
 
 <style>
-  .planner { display: flex; flex-direction: column; gap: .8rem; }
+  .planner { display: flex; flex-direction: column; gap: .6rem; }
   .tabs { display: flex; gap: .4rem; }
   .tabs button {
     flex: 1; padding: .55rem 0; border-radius: 10px; cursor: pointer;
@@ -187,20 +189,22 @@
     background: var(--card); color: var(--muted); cursor: pointer; font-size: 1rem;
   }
   .swap:hover { color: var(--accent); border-color: var(--accent); }
-  .when { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .5rem; }
-  .chips { display: flex; gap: .35rem; flex-wrap: wrap; }
+  .when { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .4rem; min-width: 0; }
+  /* Escritorio: fechas, hora y semidirectos en una sola línea; móvil: se parte solo. */
+  .when-line { display: flex; flex-wrap: wrap; gap: .5rem .75rem; align-items: flex-end; }
+  .chips { display: flex; gap: .35rem; flex-wrap: wrap; flex: 0 1 auto; }
   .chips button { border: 1px solid var(--border); background: transparent; color: var(--muted);
                   border-radius: 999px; padding: .4rem .85rem; cursor: pointer; font-size: .85rem;
                   min-height: 36px; }
   .chips button.on { border-color: var(--accent); color: var(--accent); font-weight: 650;
                      background: var(--accent-dim); }
-  .row { display: flex; gap: .6rem; align-items: end; flex-wrap: wrap; }
-  .dt { display: flex; flex-direction: column; gap: .25rem; min-width: 130px; }
+  .row { display: flex; gap: .5rem .6rem; align-items: flex-end; flex-wrap: wrap; }
+  .dt { display: flex; flex-direction: column; gap: .2rem; min-width: 120px; }
   .dt label { font-size: .75rem; color: var(--muted); }
   .tline { display: flex; gap: .4rem; align-items: center; }
   .link { background: none; border: 0; color: var(--accent); cursor: pointer; font-size: .8rem; }
   .chk { display: flex; align-items: center; gap: .45rem; font-size: .85rem;
-         color: var(--muted); white-space: nowrap; padding-bottom: .55rem; }
+         color: var(--muted); white-space: nowrap; min-height: 2.4rem; }
   .chk input { width: auto; accent-color: var(--accent); }
   .when-sum { font-size: .8rem; margin: 0; }
   .warn { color: var(--warn); }
