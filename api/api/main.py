@@ -884,7 +884,8 @@ def _radar_ext(feed: str, train_number: str | None, day) -> dict | None:
         with engine.connect() as c:
             r = c.execute(text("""
                 SELECT platform, rolling_stock, next_stop_id, next_eta,
-                       delay_min, product, provider_ts, observed_at
+                       delay_min, product, provider_ts, observed_at,
+                       identity_src
                 FROM rt_ext_ld WHERE train_number=:n AND service_date=:d"""),
                 {"n": train_number, "d": day}).mappings().first()
     except Exception:
@@ -902,6 +903,8 @@ def _radar_ext(feed: str, train_number: str | None, day) -> dict | None:
             "product": r["product"],
             "provider_ts": r["provider_ts"],
             "observed_at": r["observed_at"],
+            "identity_src": r["identity_src"],
+            "verified": r["identity_src"] in ("launching", "coverage"),
             "stale": stale}
 
 

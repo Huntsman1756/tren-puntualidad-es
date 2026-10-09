@@ -77,15 +77,12 @@ def poll_radar() -> int:
         # launchingDate: fecha de servicio declarada por el proveedor
         # (ausente en las respuestas observadas; se respeta si aparece)
         ld = _iso_to_epoch(t.get("launchingDate"))
-        sdate = (
-            datetime.fromtimestamp(ld, TZ).date()
-            if ld
-            else None
-        )
+        sdate = datetime.fromtimestamp(ld, TZ).date() if ld else None
         rows.append(
             {
                 "tn": code,
                 "sd": sdate,
+                "src": "launching" if ld else None,
                 "pf": platform if platform and platform != "0" else None,
                 "rs": json.dumps(t["rollingStock"]) if t.get("rollingStock") else None,
                 "ns": (t.get("nextStationCode") or "").strip() or None,
@@ -122,22 +119,37 @@ def poll_radar() -> int:
                 cov.setdefault(tn, set()).add(day)
         order = (today, today - timedelta(days=1), today + timedelta(days=1))
         for w in rows:
-            if w["sd"] is None:
-                days = cov.get(w["tn"], set())
+            if w["sd"] is not None:
+                continue
+            days = cov.get(w["tn"], set())
+            if len(days) == 1:
+                # única coincidencia verificable
+                w["sd"] = next(iter(days))
+                w["src"] = "coverage"
+            elif days:
+                # varios días posibles (servicio diario/continuo): la
+                # instancia exacta es ambigua — preferimos hoy, marcado,
+                # nunca se presenta como identidad verificada
                 w["sd"] = next((d for d in order if d in days), today)
+                w["src"] = "coverage_multi"
+            else:
+                # el número no figura en nuestro GTFS esos días
+                w["sd"] = today
+                w["src"] = "civil"
     with engine.begin() as c:
         for w in rows:
             c.execute(
                 text("""
                 INSERT INTO rt_ext_ld(train_number, service_date, platform,
                     rolling_stock, next_stop_id, next_eta, delay_min,
-                    product, provider_ts, observed_at, source)
-                VALUES(:tn,:sd,:pf,CAST(:rs AS jsonb),:ns,:eta,:dm,:pr,:pts,:obs,'radar')
+                    product, provider_ts, observed_at, source, identity_src)
+                VALUES(:tn,:sd,:pf,CAST(:rs AS jsonb),:ns,:eta,:dm,:pr,:pts,:obs,'radar',:src)
                 ON CONFLICT(train_number,service_date) DO UPDATE SET
                   platform=EXCLUDED.platform, rolling_stock=EXCLUDED.rolling_stock,
                   next_stop_id=EXCLUDED.next_stop_id, next_eta=EXCLUDED.next_eta,
                   delay_min=EXCLUDED.delay_min, product=EXCLUDED.product,
-                  provider_ts=EXCLUDED.provider_ts, observed_at=EXCLUDED.observed_at
+                  provider_ts=EXCLUDED.provider_ts, observed_at=EXCLUDED.observed_at,
+                  identity_src=EXCLUDED.identity_src
             """),
                 w,
             )
@@ -153,6 +165,9 @@ def poll_radar() -> int:
                 AND sd.service_id=t.service_id AND sd.day=e.service_date
               WHERE t.feed='ld' AND t.train_number=e.train_number)""")
         ).scalar()
+        by_src = {}
+        for w in rows:
+            by_src[w["src"]] = by_src.get(w["src"], 0) + 1
         set_meta(
             c,
             "radar_stats",
@@ -160,6 +175,7 @@ def poll_radar() -> int:
                 {
                     "provider_rows": len(rows),
                     "matched": matched,
+                    "identity_src": by_src,
                     "provider_ts": provider_ts,
                     "observed_at": observed,
                 }

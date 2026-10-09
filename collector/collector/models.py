@@ -1,4 +1,5 @@
 """Esquema de datos compartido (collector lo crea, api lo lee)."""
+
 from sqlalchemy import (
     BigInteger,
     Column,
@@ -65,6 +66,7 @@ Index("ix_stop_times_stop", StopTime.feed, StopTime.stop_id, StopTime.dep)
 
 class ServiceDay(Base):
     """Expansión de calendar/calendar_dates: un registro por día activo."""
+
     __tablename__ = "service_days"
     feed = Column(String(8), primary_key=True)
     service_id = Column(String(64), primary_key=True)
@@ -76,13 +78,14 @@ Index("ix_service_days_day", ServiceDay.feed, ServiceDay.day)
 
 class RtTrip(Base):
     """Estado actual de un viaje según trip_updates."""
+
     __tablename__ = "rt_trip"
     feed = Column(String(8), primary_key=True)
     trip_id = Column(String(64), primary_key=True)
     delay = Column(Integer)
     sched_rel = Column(String(24))
     next_stop_id = Column(String(32))
-    next_stop_time = Column(BigInteger)   # epoch
+    next_stop_time = Column(BigInteger)  # epoch
     next_stop_delay = Column(Integer)
     updated_at = Column(BigInteger)
     first_seen = Column(BigInteger)
@@ -141,11 +144,12 @@ class Observation(Base):
     provider_ts = timestamp declarado por el feed (feed timestamp);
     observed_at = hora de recogida por nosotros.
     """
+
     __tablename__ = "observations"
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     feed = Column(String(8))
     trip_id = Column(String(64))
-    service_date = Column(Date)             # NULL = legacy
+    service_date = Column(Date)  # NULL = legacy
     stop_id = Column(String(32))
     delay = Column(Integer)
     time = Column(BigInteger)
@@ -155,8 +159,7 @@ class Observation(Base):
     observed_at = Column(BigInteger)
 
 
-Index("ix_obs_instance", Observation.feed, Observation.trip_id,
-      Observation.service_date)
+Index("ix_obs_instance", Observation.feed, Observation.trip_id, Observation.service_date)
 
 
 Index("ix_obs_trip", Observation.feed, Observation.trip_id)
@@ -176,12 +179,13 @@ class TripFlag(Base):
     (modal) de su ruta pero omite >=2 paradas interiores. No es una marca
     oficial de "CIVIS": Renfe no publica ese atributo en GTFS.
     """
+
     __tablename__ = "trip_flags"
     feed = Column(String(8), primary_key=True)
     trip_id = Column(String(64), primary_key=True)
     n_stops = Column(Integer)
-    semidirect = Column(Integer, default=0)   # 0/1
-    skipped = Column(Integer, default=0)      # paradas interiores omitidas
+    semidirect = Column(Integer, default=0)  # 0/1
+    skipped = Column(Integer, default=0)  # paradas interiores omitidas
 
 
 Index("ix_trip_flags_semidirect", TripFlag.feed, TripFlag.semidirect)
@@ -194,6 +198,7 @@ class SchedCapture(Base):
     late=1: la primera captura se hizo después del día (denominadores
     reconstruidos desde un GTFS posterior, marcado por honestidad).
     """
+
     __tablename__ = "sched_capture"
     feed = Column(String(8), primary_key=True)
     day = Column(Date, primary_key=True)
@@ -208,6 +213,7 @@ class Circulation(Base):
 
     La recarga del GTFS NO reescribe días cerrados: los denominadores
     históricos no cambian retrospectivamente."""
+
     __tablename__ = "circulation"
     feed = Column(String(8), primary_key=True)
     day = Column(Date, primary_key=True)
@@ -216,8 +222,8 @@ class Circulation(Base):
     train_number = Column(String(16))
     first_stop = Column(String(32))
     last_stop = Column(String(32))
-    dep_secs = Column(Integer)   # primera salida programada (s desde medianoche)
-    arr_secs = Column(Integer)   # última llegada programada
+    dep_secs = Column(Integer)  # primera salida programada (s desde medianoche)
+    arr_secs = Column(Integer)  # última llegada programada
     n_stops = Column(Integer)
 
 
@@ -228,6 +234,7 @@ Index("ix_circ_route", Circulation.feed, Circulation.route_id, Circulation.day)
 class CirculationStop(Base):
     """Parada programada de una circulación capturada (denominadores por
     estación/trayecto/franja independientes de recargas del GTFS)."""
+
     __tablename__ = "circulation_stop"
     feed = Column(String(8), primary_key=True)
     day = Column(Date, primary_key=True)
@@ -238,8 +245,7 @@ class CirculationStop(Base):
     dep = Column(Integer)
 
 
-Index("ix_cstop_stop", CirculationStop.feed, CirculationStop.stop_id,
-      CirculationStop.day)
+Index("ix_cstop_stop", CirculationStop.feed, CirculationStop.stop_id, CirculationStop.day)
 
 
 class GeoStation(Base):
@@ -250,23 +256,24 @@ class GeoStation(Base):
     procedencia: 'catalogo' (join exacto CODIGO oficial) o 'geo_inferida'
     (vecino catalogado cercano, auditable por dist_m/matched_code).
     """
+
     __tablename__ = "geo_station"
     feed = Column(String(8), primary_key=True)
     stop_id = Column(String(32), primary_key=True)
-    cpro = Column(String(2))           # CPRO INE o None
-    provincia = Column(String(40))     # nombre oficial INE
-    ccaa_code = Column(String(2))      # CAUTO INE
+    cpro = Column(String(2))  # CPRO INE o None
+    provincia = Column(String(40))  # nombre oficial INE
+    ccaa_code = Column(String(2))  # CAUTO INE
     ccaa = Column(String(40))
-    poblacion = Column(String(80))     # POBLACION del catálogo (núcleo)
+    poblacion = Column(String(80))  # POBLACION del catálogo (núcleo)
     source = Column(String(20), nullable=False)  # catalogo | geo_inferida
     matched_code = Column(String(12))  # CÓDIGO del catálogo usado
-    dist_m = Column(Float)             # distancia de la inferencia
+    dist_m = Column(Float)  # distancia de la inferencia
     active = Column(Integer, default=1)
     # Núcleo de Cercanías oficial (geojson del visor Renfe, join por
     # CODIGO_ESTACION). NULL si la estación no consta en esa fuente.
     nucleo_code = Column(String(4))
     nucleo = Column(String(40))
-    lineas = Column(Text)              # LINEAS oficiales que paran aquí
+    lineas = Column(Text)  # LINEAS oficiales que paran aquí
 
 
 class RouteCore(Base):
@@ -276,12 +283,13 @@ class RouteCore(Base):
     visor Renfe por CODIGO_ESTACION). Solo se asigna si las paradas
     clasificadas mayoritan el mismo núcleo; `share`/`matched`/`total`
     documentan la evidencia."""
+
     __tablename__ = "route_core"
     feed = Column(String(8), primary_key=True)
     route_id = Column(String(64), primary_key=True)
     nucleo_code = Column(String(4))
-    nucleo = Column(String(40))        # NULL si no verificable
-    share = Column(Float)              # paradas clasificadas en el núcleo
+    nucleo = Column(String(40))  # NULL si no verificable
+    share = Column(Float)  # paradas clasificadas en el núcleo
     matched = Column(Integer)
     total = Column(Integer)
     updated_at = Column(BigInteger)
@@ -297,6 +305,7 @@ class AnomalyEpisode(Base):
     >= ANOMALY_CONFIRM_SEC) | resuelta (sin señal durante ANOMALY_CLEAR_SEC
     con datos RT frescos). Nunca se resuelve por falta de datos RT: si el
     feed no es fresco el episodio queda igual y se marca rt_gap_since."""
+
     __tablename__ = "anomaly_episode"
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     nucleo_code = Column(String(4), nullable=False)
@@ -316,12 +325,12 @@ class AnomalyEpisode(Base):
     last_metrics = Column(JSONB)
 
 
-Index("ix_anomaly_open", AnomalyEpisode.status, AnomalyEpisode.nucleo_code,
-      AnomalyEpisode.family_slug)
+Index("ix_anomaly_open", AnomalyEpisode.status, AnomalyEpisode.nucleo_code, AnomalyEpisode.family_slug)
 
 
 class AnomalySample(Base):
     """Métricas por línea en cada evaluación de un episodio (evolución)."""
+
     __tablename__ = "anomaly_sample"
     episode_id = Column(BigInteger, primary_key=True)
     ts = Column(BigInteger, primary_key=True)
@@ -344,26 +353,32 @@ class OfficialNotice(Base):
     (sin novedades en NOTICE_STALE_SEC; no se presume resuelta).
     thread_id agrupa un aviso y sus actualizaciones (misma línea + estación/
     problema)."""
+
     __tablename__ = "official_notice"
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    source = Column(String(16), nullable=False)        # whatsapp | manual
-    channel = Column(String(64), nullable=False)       # p. ej. cercanias-madrid
-    external_id = Column(String(128))                  # id del mensaje en origen
+    source = Column(String(16), nullable=False)  # whatsapp | manual
+    channel = Column(String(64), nullable=False)  # p. ej. cercanias-madrid
+    external_id = Column(String(128))  # id del mensaje en origen
     posted_at = Column(BigInteger, nullable=False)
     received_at = Column(BigInteger, nullable=False)
     text = Column(Text, nullable=False)
     nucleo_code = Column(String(4))
-    lines = Column(JSONB)                              # ["C5", "C4b"]
-    stations = Column(JSONB)                           # [{"name","stop_id"}]
-    kind = Column(String(24))                          # averia_infraestructura | averia_tren | ...
+    lines = Column(JSONB)  # ["C5", "C4b"]
+    stations = Column(JSONB)  # [{"name","stop_id"}]
+    kind = Column(String(24))  # averia_infraestructura | averia_tren | ...
     status = Column(String(16), nullable=False)
     is_update = Column(Integer, default=0)
     thread_id = Column(BigInteger)
-    parse = Column(JSONB)                              # evidencia del parser
+    parse = Column(JSONB)  # evidencia del parser
 
 
-Index("ux_notice_external", OfficialNotice.source, OfficialNotice.channel,
-      OfficialNotice.external_id, unique=True)
+Index(
+    "ux_notice_external",
+    OfficialNotice.source,
+    OfficialNotice.channel,
+    OfficialNotice.external_id,
+    unique=True,
+)
 
 
 class CaptureHealth(Base):
@@ -372,9 +387,10 @@ class CaptureHealth(Base):
     Lo escribe el collector en cada sondeo correcto: nº de sondeos, primer y
     último sondeo y mayor hueco entre sondeos consecutivos. Las estadísticas
     lo usan para excluir días de captura parcial (arranque, caídas)."""
+
     __tablename__ = "capture_health"
     feed = Column(String(8), primary_key=True)
-    source = Column(String(16), primary_key=True)   # trip_update | fleet
+    source = Column(String(16), primary_key=True)  # trip_update | fleet
     day = Column(Date, primary_key=True)
     polls = Column(Integer, default=0)
     first_ts = Column(BigInteger)
@@ -384,6 +400,7 @@ class CaptureHealth(Base):
 
 class Shape(Base):
     """Puntos de shapes.txt (solo CER publica geometrías)."""
+
     __tablename__ = "shapes"
     feed = Column(String(8), primary_key=True)
     shape_id = Column(String(64), primary_key=True)
@@ -395,6 +412,7 @@ class Shape(Base):
 class ShapeQuality(Base):
     """Control de calidad de cada shape (ver collector/shapes.py).
     status: valid | partial | unused | invalid. Solo 'valid' se dibuja."""
+
     __tablename__ = "shape_quality"
     feed = Column(String(8), primary_key=True)
     shape_id = Column(String(64), primary_key=True)
@@ -409,10 +427,11 @@ class ShapeQuality(Base):
 class StationNucleo(Base):
     """Contraste oficial: núcleo de Cercanías por CODIGO_ESTACION según el
     geojson del visor Renfe. Se sustituye solo si la descarga tiene datos."""
+
     __tablename__ = "station_nucleo"
-    code = Column(String(12), primary_key=True)   # CODIGO_ESTACION (5 díg.)
+    code = Column(String(12), primary_key=True)  # CODIGO_ESTACION (5 díg.)
     nucleo_code = Column(String(4))
-    lineas = Column(Text)                          # LINEAS oficiales
+    lineas = Column(Text)  # LINEAS oficiales
     fetched_at = Column(BigInteger)
 
 
@@ -422,6 +441,7 @@ class LineRoute(Base):
     nucleo_code NULL = no asignable de forma verificable (status explica
     por qué). line_code es el código comercial con grafía oficial;
     family_code agrupa variantes (C4a, C4b -> C4)."""
+
     __tablename__ = "line_route"
     feed = Column(String(8), primary_key=True)
     route_id = Column(String(64), primary_key=True)
@@ -430,13 +450,13 @@ class LineRoute(Base):
     line_slug = Column(String(16))
     family_code = Column(String(16))
     family_slug = Column(String(16))
-    mode = Column(String(8))               # tren | bus
-    status = Column(String(16))            # verified|prefix_only|conflict|unmapped|not_applicable
+    mode = Column(String(8))  # tren | bus
+    status = Column(String(16))  # verified|prefix_only|conflict|unmapped|not_applicable
     evidence = Column(JSONB)
     long_name = Column(Text)
     color = Column(String(8))
     text_color = Column(String(8))
-    n_trips = Column(Integer, default=0)   # viajes en el GTFS vigente
+    n_trips = Column(Integer, default=0)  # viajes en el GTFS vigente
     updated_at = Column(BigInteger)
 
 
@@ -445,6 +465,7 @@ Index("ix_line_route_line", LineRoute.nucleo_code, LineRoute.family_slug)
 
 class TripSpan(Base):
     """Primera salida / última llegada programada de cada viaje."""
+
     __tablename__ = "trip_span"
     feed = Column(String(8), primary_key=True)
     trip_id = Column(String(64), primary_key=True)
@@ -456,6 +477,7 @@ class TripSpan(Base):
 class AlertSeen(Base):
     """Histórico de avisos oficiales: cada alert_id con la última versión
     del payload y cuándo se vio por primera y última vez en el feed."""
+
     __tablename__ = "alerts_seen"
     feed = Column(String(8), primary_key=True)
     alert_id = Column(String(128), primary_key=True)
@@ -473,6 +495,7 @@ class PushDevice(Base):
     La credencial de posesión es un token aleatorio entregado una sola vez
     al registrar el dispositivo; solo se guarda su SHA-256. token_hash NULL
     = dispositivo migrado de push_subs (v0.3.x) aún no reclamado."""
+
     __tablename__ = "push_devices"
     id = Column(String(36), primary_key=True)
     endpoint = Column(Text, unique=True, nullable=False)
@@ -486,6 +509,7 @@ class PushDevice(Base):
 class PushRule(Base):
     """Regla de aviso independiente de un dispositivo (trayecto o estación).
     Borrar una regla no afecta a las demás ni al dispositivo."""
+
     __tablename__ = "push_rules"
     id = Column(String(36), primary_key=True)
     device_id = Column(String(36), nullable=False, index=True)
@@ -504,6 +528,7 @@ class PushSub(Base):
     Suscripción Web Push anónima. Sin cuentas: la clave es el endpoint
     (opaco, controlado por el navegador). Borrado inmediato al darse de baja
     o cuando el push devuelve 404/410."""
+
     __tablename__ = "push_subs"
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     endpoint = Column(Text, unique=True, nullable=False)
@@ -519,15 +544,16 @@ class PushSub(Base):
 
 class RtFleet(Base):
     """Estado observado por tren desde el visor oficial (flota.json)."""
+
     __tablename__ = "rt_fleet"
     feed = Column(String(8), primary_key=True, default="cer")
     trip_id = Column(String(64), primary_key=True)
     train_number = Column(String(16))
     line = Column(String(16))
-    delay_min = Column(Integer)          # retrasoMin observado
+    delay_min = Column(Integer)  # retrasoMin observado
     cur_stop_id = Column(String(32))
     next_stop_id = Column(String(32))
-    next_eta = Column(BigInteger)        # epoch
+    next_eta = Column(BigInteger)  # epoch
     origin_stop_id = Column(String(32))
     dest_stop_id = Column(String(32))
     lat = Column(Float)
@@ -543,6 +569,7 @@ class GtfsTransfer(Base):
     Solo existe en el feed CER. Las reglas route/trip solo aplican cuando
     coinciden los extremos; las filas sin route/trip son de nivel parada.
     """
+
     __tablename__ = "gtfs_transfer"
     feed = Column(String(8), primary_key=True)
     from_stop_id = Column(String(32), primary_key=True)
@@ -551,8 +578,8 @@ class GtfsTransfer(Base):
     to_route_id = Column(String(64), primary_key=True, default="")
     from_trip_id = Column(String(64), primary_key=True, default="")
     to_trip_id = Column(String(64), primary_key=True, default="")
-    transfer_type = Column(Integer)         # 0 recomendado, 1 posible, 2 mínimo, 3 prohibido
-    min_transfer_time = Column(Integer)     # segundos
+    transfer_type = Column(Integer)  # 0 recomendado, 1 posible, 2 mínimo, 3 prohibido
+    min_transfer_time = Column(Integer)  # segundos
 
 
 Index("ix_gtfs_transfer_from", GtfsTransfer.feed, GtfsTransfer.from_stop_id)
@@ -563,6 +590,7 @@ class TransferLink(Base):
     (posiblemente de feeds distintos). Catálogo curado — NUNCA inferido por
     proximidad geográfica. min_secs es el tiempo mínimo de intercambio en
     ese sentido (los enlaces son dirigidos: ida y vuelta pueden diferir)."""
+
     __tablename__ = "transfer_link"
     link_id = Column(String(64), primary_key=True)
     from_feed = Column(String(8), nullable=False)
@@ -572,7 +600,7 @@ class TransferLink(Base):
     min_secs = Column(Integer, nullable=False)
     kind = Column(String(16), nullable=False)  # complex | walk
     label = Column(Text)
-    source = Column(Text)                      # evidencia que justifica el enlace
+    source = Column(Text)  # evidencia que justifica el enlace
 
 
 Index("ix_transfer_link_from", TransferLink.from_feed, TransferLink.from_stop_id)
@@ -584,18 +612,23 @@ class RtExtLd(Base):
     Identidad estricta: (train_number, service_date) — nunca solo número.
     Todo lo que publique la API debe etiquetarse source='radar' y mostrar
     provider_ts para que el usuario distinga su procedencia."""
+
     __tablename__ = "rt_ext_ld"
     train_number = Column(String(16), primary_key=True)
     service_date = Column(Date, primary_key=True)
     platform = Column(String(16))
     rolling_stock = Column(JSONB)
     next_stop_id = Column(String(32))
-    next_eta = Column(BigInteger)          # epoch
+    next_eta = Column(BigInteger)  # epoch
     delay_min = Column(Integer)
     product = Column(String(32))
-    provider_ts = Column(BigInteger)       # timestamp declarado por radar
-    observed_at = Column(BigInteger)       # nuestra hora de recogida
+    provider_ts = Column(BigInteger)  # timestamp declarado por radar
+    observed_at = Column(BigInteger)  # nuestra hora de recogida
     source = Column(String(16), default="radar")
+    # cómo se eligió service_date: 'launching' (declarada por el
+    # proveedor), 'coverage' (único día en service_days), 'coverage_multi'
+    # (varios días posibles — instancia ambigua) o 'civil' (sin verificar)
+    identity_src = Column(String(16))
 
 
 Index("ix_rt_ext_ld_obs", RtExtLd.observed_at)
