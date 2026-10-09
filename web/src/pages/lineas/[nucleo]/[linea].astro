@@ -35,7 +35,8 @@ const fam = L.family;
     <div>
       <h1>Línea {L.line.code} · {L.nucleo.brand} {L.nucleo.name}</h1>
       <p class="muted">{L.nucleo.operator}{!L.line.is_family && fam.code !== L.line.code &&
-        <> · variante de la <a href={fam.url}>{fam.code}</a></>}</p>
+        <> · variante de la <a href={fam.url}>{fam.code}</a></>}
+        · <a href={`/mapa/${L.nucleo.slug}?linea=${linea}`}>Ver en el mapa</a></p>
     </div>
   </div>
   {fam.variants.length > 1 && (

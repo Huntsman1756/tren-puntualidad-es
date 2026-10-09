@@ -146,8 +146,18 @@ for (const mob of [false, true]) {
     await pg.waitForSelector('#avisos', { timeout: 8000 });
   });
 
+  await run('mapa: trazados validados y estaciones', mob, async (pg) => {
+    await pg.goto(BASE + '/mapa/sevilla', { waitUntil: 'networkidle' });
+    await pg.waitForSelector('.leaflet-container canvas', { timeout: 15000 });
+    await pg.waitForSelector('.legend', { timeout: 10000 });
+    expect(/trenes con posición/.test(await pg.locator('.legend').textContent()), 'sin leyenda');
+    expect(!(await pg.locator('.map + .err').count()), 'muestra error de consulta');
+    expect(await pg.locator('.leaflet-control-attribution', { hasText: 'OpenStreetMap' }).count(), 'sin atribución');
+    await pg.waitForSelector('.legend', { timeout: 5000 });
+  });
+
   await run('sin scroll horizontal', mob, async (pg) => {
-    for (const u of ['/', '/lineas/madrid/c4', '/incidencias', `/trayecto?from=cer:17000&to=cer:18000`, '/retrasos?vista=lineas']) {
+    for (const u of ['/', '/lineas/madrid/c4', '/incidencias', `/trayecto?from=cer:17000&to=cer:18000`, '/retrasos?vista=lineas', '/mapa/madrid']) {
       await pg.goto(BASE + u, { waitUntil: 'domcontentloaded' });
       const over = await pg.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
       expect(over <= 2, `${u}: desborda ${over}px`);

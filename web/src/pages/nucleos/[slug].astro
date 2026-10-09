@@ -24,7 +24,8 @@ const lineAlerts = (inc?.items || []).filter((a: any) => a.relevance === 'line')
       description={`Líneas del núcleo de ${n.brand} ${n.name}, avisos oficiales y retrasos en vivo.`}>
   <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › <a href="/nucleos">Núcleos</a> › {n.name}</nav>
   <h1>{n.brand} {n.name}</h1>
-  <p class="muted">{n.operator} · {n.lines.length} líneas · {n.stations} estaciones con servicio en el horario vigente</p>
+  <p class="muted">{n.operator} · {n.lines.length} líneas · {n.stations} estaciones con servicio en el horario vigente
+    · <a href={`/mapa/${slug}`}>Ver mapa</a></p>
 
   <section class="card">
     <h2>Líneas</h2>

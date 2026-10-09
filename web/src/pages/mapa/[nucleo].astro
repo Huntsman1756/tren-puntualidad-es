@@ -1,0 +1,50 @@
+---
+import Base from '../../layouts/Base.astro';
+import MapView from '../../components/MapView.svelte';
+import { api } from '../../lib/api';
+
+const { nucleo } = Astro.params as { nucleo: string };
+const linea = Astro.url.searchParams.get('linea') || '';
+let n: any;
+try { n = await api.nucleo(nucleo); }
+catch (e: any) {
+  if (e?.status === 404) return new Response(null, { status: 404, statusText: 'Not found' });
+  throw e;
+}
+const fam = linea ? n.lines.find((l: any) => l.slug === linea
+  || l.variants.some((v: any) => v.slug === linea)) : null;
+if (linea && !fam) return new Response(null, { status: 404, statusText: 'Not found' });
+const code = linea ? (fam.slug === linea ? fam.code
+  : fam.variants.find((v: any) => v.slug === linea).code) : '';
+---
+<Base title={`Mapa ${code ? code + ' · ' : ''}${n.brand} ${n.name} — Trenes a tiempo`}
+      description={`Mapa de ${code ? 'la línea ' + code + ' de ' : ''}${n.brand} ${n.name}: estaciones, trazados oficiales validados y posición publicada de los trenes.`}>
+  <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › <a href="/nucleos">Núcleos</a> ›
+    <a href={n.url}>{n.name}</a>{code && <> › <a href={`/lineas/${nucleo}/${linea}`}>{code}</a></>} › Mapa</nav>
+  <h1>Mapa {code && `${code} · `}{n.brand} {n.name}</h1>
+  <form class="sel" method="get">
+    <label>Línea
+      <select name="linea" onchange="this.form.submit()">
+        <option value="">Todas</option>
+        {n.lines.map((l: any) => <option value={l.slug} selected={l.slug === linea}>{l.code}</option>)}
+      </select>
+    </label>
+    <noscript><button type="submit">Ver</button></noscript>
+  </form>
+  <MapView client:only="svelte" nucleo={nucleo} linea={linea} />
+  <div class="card muted small">
+    <p>Los trenes se dibujan exactamente donde Renfe publica su posición (visor oficial o
+      GTFS-RT), sin interpolar; no es necesariamente una posición GPS. Las posiciones de más
+      de 10 minutos no se muestran.</p>
+    <p>Solo dibujamos los trazados oficiales (<code>shapes.txt</code>) que pasan un control
+      de calidad: al menos el 90 % de las estaciones de sus trenes a menos de 300 m. Renfe
+      publica muchos trazados incompletos; en esas líneas verás solo las estaciones.</p>
+  </div>
+</Base>
+<style>
+  .sel { margin: .3rem 0 .6rem; font-size: .85rem; }
+  .sel label { display: inline-flex; gap: .4rem; align-items: center; color: var(--muted); }
+  .sel select { width: auto; }
+  .small { font-size: .8rem; margin-top: .8rem; }
+  .small p { margin: .3rem 0; }
+</style>

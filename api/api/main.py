@@ -19,6 +19,7 @@ from api.incidents import router as incidents_router
 from api.lines_api import live_trains
 from api.lines_api import router as lines_router
 from api.lines_api import station_lines as _station_lines
+from api.map_api import router as map_router
 from api.push_api import router as push_router
 
 TZ = ZoneInfo("Europe/Madrid")
@@ -1225,6 +1226,7 @@ app.include_router(v1)
 app.include_router(lines_router)
 app.include_router(incidents_router)
 app.include_router(push_router)
+app.include_router(map_router)
 
 
 @app.on_event("startup")

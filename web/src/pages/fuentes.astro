@@ -79,6 +79,18 @@ import Base from '../layouts/Base.astro';
   </div>
 
   <div class="card">
+    <h2 style="margin-top:0;font-size:1rem">Mapa</h2>
+    <ul>
+      <li>Trazados: <code>shapes.txt</code> del GTFS de Cercanías. Solo se dibujan los que
+          pasan un control (≥90 % de las estaciones de sus trenes a menos de 300 m); muchos
+          trazados publicados están incompletos y no se muestran.</li>
+      <li>Posiciones: las publicadas por Renfe (visor oficial y GTFS-RT), con su antigüedad.
+          No interpolamos ni afirmamos que sean GPS. Se ocultan las de más de 10 minutos.</li>
+      <li>Cartografía: © colaboradores de OpenStreetMap.</li>
+    </ul>
+  </div>
+
+  <div class="card">
     <h2 style="margin-top:0;font-size:1rem">Incidencias</h2>
     <ul>
       <li>Procedencia: feed GTFS-RT <em>Service Alerts</em> de Renfe (solo Cercanías y

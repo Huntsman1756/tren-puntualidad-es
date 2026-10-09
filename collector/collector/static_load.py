@@ -19,6 +19,7 @@ from collector.gtfsutil import (
     read_gtfs_csv,
 )
 from collector.lines import compute_line_routes, compute_trip_spans
+from collector.shapes import compute_shape_quality
 
 log = logging.getLogger("collector.static")
 
@@ -37,7 +38,7 @@ def load_feed(feed: str, path: str, conn):
     today = datetime.now(TZINFO).date()
     counts = {}
 
-    for t in ("stop_times", "service_days", "trips", "routes", "stops"):
+    for t in ("stop_times", "service_days", "trips", "routes", "stops", "shapes"):
         conn.execute(text(f"DELETE FROM {t} WHERE feed=:f"), {"f": feed})
 
     with zipfile.ZipFile(path) as z:
@@ -64,13 +65,27 @@ def load_feed(feed: str, path: str, conn):
         rows = [
             (feed, r["trip_id"], r.get("route_id"), r.get("service_id"),
              r.get("trip_headsign"),
-             extract_train_number(feed, r["trip_id"], r.get("trip_short_name", "")))
+             extract_train_number(feed, r["trip_id"], r.get("trip_short_name", "")),
+             r.get("shape_id") or None)
             for r in read_gtfs_csv(z, "trips.txt") if r.get("trip_id")
         ]
         _copy_rows(conn, "trips",
-                   ["feed", "trip_id", "route_id", "service_id", "headsign", "train_number"],
+                   ["feed", "trip_id", "route_id", "service_id", "headsign",
+                    "train_number", "shape_id"],
                    rows)
         counts["trips"] = len(rows)
+
+        # shapes (geometrías; se validan en compute_shape_quality)
+        rows = [
+            (feed, r["shape_id"], _i(r.get("shape_pt_sequence")) or 0,
+             _f(r.get("shape_pt_lat")), _f(r.get("shape_pt_lon")))
+            for r in read_gtfs_csv(z, "shapes.txt")
+            if r.get("shape_id") and r.get("shape_pt_lat") and r.get("shape_pt_lon")
+        ]
+        if rows:
+            _copy_rows(conn, "shapes", ["feed", "shape_id", "seq", "lat", "lon"],
+                       list({(x[0], x[1], x[2]): x for x in rows}.values()))
+        counts["shapes"] = len(rows)
 
         # service_days
         cal = list(read_gtfs_csv(z, "calendar.txt"))
@@ -105,6 +120,7 @@ def load_feed(feed: str, path: str, conn):
     conn.execute(text("ANALYZE trips"))
     counts["trip_flags"] = compute_trip_flags(conn, feed)
     counts["trip_span"] = compute_trip_spans(conn, feed)
+    counts["shape_quality"] = compute_shape_quality(conn, feed)
     # identidad de líneas con el último contraste oficial guardado
     counts["line_route"] = compute_line_routes(conn)
     counts["snapshots"] = ensure_snapshots_conn(conn, feed)

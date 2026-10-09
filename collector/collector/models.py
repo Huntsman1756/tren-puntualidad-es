@@ -47,6 +47,7 @@ class Trip(Base):
     service_id = Column(String(64))
     headsign = Column(Text)
     train_number = Column(String(16), index=True)
+    shape_id = Column(String(64))
 
 
 class StopTime(Base):
@@ -287,6 +288,30 @@ class RouteCore(Base):
 
 
 Index("ix_route_core_nucleo", RouteCore.feed, RouteCore.nucleo)
+
+
+class Shape(Base):
+    """Puntos de shapes.txt (solo CER publica geometrías)."""
+    __tablename__ = "shapes"
+    feed = Column(String(8), primary_key=True)
+    shape_id = Column(String(64), primary_key=True)
+    seq = Column(Integer, primary_key=True)
+    lat = Column(Float)
+    lon = Column(Float)
+
+
+class ShapeQuality(Base):
+    """Control de calidad de cada shape (ver collector/shapes.py).
+    status: valid | partial | unused | invalid. Solo 'valid' se dibuja."""
+    __tablename__ = "shape_quality"
+    feed = Column(String(8), primary_key=True)
+    shape_id = Column(String(64), primary_key=True)
+    n_points = Column(Integer)
+    stations = Column(Integer)
+    stations_near = Column(Integer)
+    share = Column(Float)
+    length_m = Column(Integer)
+    status = Column(String(12))
 
 
 class StationNucleo(Base):

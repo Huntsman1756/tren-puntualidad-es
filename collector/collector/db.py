@@ -24,6 +24,7 @@ def _migrate(c):
         "ALTER TABLE geo_station ADD COLUMN IF NOT EXISTS nucleo VARCHAR(40)",
         "ALTER TABLE geo_station ADD COLUMN IF NOT EXISTS lineas TEXT",
         "UPDATE observations SET source='legacy', kind='legacy' WHERE source IS NULL",
+        "ALTER TABLE trips ADD COLUMN IF NOT EXISTS shape_id VARCHAR(64)",
         # inicio efectivo de la captura tipificada: para despliegues con
         # datos v0.3.3 previos, se siembra desde la primera observación
         # tipificada existente por (feed, fuente)

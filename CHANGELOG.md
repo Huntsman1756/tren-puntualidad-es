@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.5] — 2026-10-09
+
+### Mapa por núcleo (condicionado a datos válidos)
+- `/mapa/{núcleo}?linea=` con Leaflet 1.9.4 (BSD-2) y teselas OpenStreetMap
+  con atribución. Enlazado desde núcleos y líneas.
+- Se cargan `shapes.txt` y `trips.shape_id` del GTFS CER. Cada shape se
+  valida contra las estaciones reales de sus viajes (≥90 % a <300 m); solo
+  las válidas se dibujan (67/144 hoy). Las incompletas se listan como
+  excluidas: nunca se inventan geometrías.
+- Posiciones tal como las publica Renfe (visor y GTFS-RT), una por tren (la
+  más reciente), con antigüedad: ≤2 min destacada, 2–10 min atenuada, más
+  antiguas ocultas y contadas. Sin interpolación; no se presentan como GPS.
+- API `/api/v1/mapa/{núcleo}`; tabla `shape_quality` auditable.
+
 ## [0.3.4] — 2026-10-09
 
 ### Identidad inequívoca de líneas
