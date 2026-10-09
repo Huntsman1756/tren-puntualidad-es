@@ -6,6 +6,7 @@ import IncidentSignals from '../components/IncidentSignals.svelte';
 import OfficialNotices from '../components/OfficialNotices.svelte';
 import { api } from '../lib/api';
 import { isOpen } from '../lib/signals';
+import { fmtStamp } from '../lib/format';
 
 const sp = Astro.url.searchParams;
 const f = {
@@ -13,8 +14,14 @@ const f = {
   linea: sp.get('linea') || '',
   estacion: sp.get('estacion') || '',
   categoria: sp.get('categoria') || '',
+  estado: sp.get('estado') || '',
+  fuente: sp.get('fuente') || '',
   periodo: sp.get('periodo') || 'actuales',
 };
+// Con filtro de estado se piden todos los hilos (7 días) y se filtra aquí;
+// sin él, solo los abiertos con novedad en 24 h.
+const avisoOpts = f.estado
+  ? { aviso_estado: 'todos', aviso_horas: '168' } : {};
 let data: any = null;
 let nucleos: any[] = [];
 let anom: any = null;
@@ -29,6 +36,7 @@ try {
       estacion: f.estacion || undefined,
       categoria: f.categoria || undefined,
       periodo: f.periodo,
+      ...avisoOpts,
     }),
     api.nucleos().catch(() => []),
     // Señales inferidas: si fallan, la sección muestra su estado vacío.
@@ -49,7 +57,27 @@ const SIX_H = 6 * 3600;
 // Abiertos + resueltos de las últimas 6 h.
 const sigItems: any[] = (anom?.items || []).filter((it: any) =>
   isOpen(it) || (it.resolved_at != null && nowS - it.resolved_at <= SIX_H));
-const notices: any[] = data?.official_notices || [];
+// Avisos de canales oficiales: filtro de estado y de fuente (whatsapp|manual).
+let notices: any[] = data?.official_notices || [];
+if (f.estado) notices = notices.filter((t: any) => t.status === f.estado);
+if (f.fuente === 'whatsapp' || f.fuente === 'manual')
+  notices = notices.filter((t: any) => t.source === f.fuente || t.messages?.some((m: any) => m.source === f.fuente));
+const waHealth = data?.sources?.whatsapp || null;
+// Filtro de estado sobre avisos GTFS-RT (status distintos: active/upcoming/…)
+const ESTADO_GTFS: Record<string, string[]> = {
+  activa: ['active'], en_recuperacion: ['active'],
+  normalizada: ['withdrawn', 'expired'],
+};
+let gtfsItems: any[] = data?.items || [];
+if (f.estado && ESTADO_GTFS[f.estado]) {
+  gtfsItems = gtfsItems.filter((a: any) => ESTADO_GTFS[f.estado].includes(a.status));
+} else if (f.estado === 'sin_actualizar') {
+  gtfsItems = [];   // no existe equivalente en el feed oficial
+}
+const gtfsStale = !!data?.source?.content_stale;
+const showA = !f.fuente || ['whatsapp', 'manual'].includes(f.fuente);
+const showB = !f.fuente || f.fuente === 'inferidas';
+const showC = !f.fuente || f.fuente === 'gtfs';
 const CATS: Record<string, string> = data?.categories || {
   accesibilidad: 'Accesibilidad', obras: 'Obras programadas',
   interrumpido: 'Servicio interrumpido', alternativo: 'Servicio alternativo',
@@ -59,19 +87,29 @@ const PERIODS: Record<string, string> = {
   actuales: 'Publicadas ahora', vigentes: 'Vigentes ahora', proximas: 'Próximas',
   recientes: 'Retiradas (7 días)', todas: 'Todas (7 días)',
 };
+const ESTADOS: Record<string, string> = {
+  activa: 'Activa', en_recuperacion: 'En recuperación',
+  normalizada: 'Normalizada', sin_actualizar: 'Sin actualizar',
+};
+const FUENTES: Record<string, string> = {
+  whatsapp: 'Canal WhatsApp (auto)', manual: 'Entrada manual',
+  gtfs: 'Feed GTFS-RT', inferidas: 'Inferidas por retrasos',
+};
 const scopeTitle = f.estacion ? `en ${stationName}`
   : nuc ? (f.linea ? `línea ${nuc.lines.find((l: any) => l.slug === f.linea)?.code
            ?? nuc.lines.flatMap((l: any) => l.variants).find((v: any) => v.slug === f.linea)?.code
            ?? f.linea} · ${nuc.name}` : `núcleo ${nuc.name}`)
   : 'en Cercanías y Rodalies';
+const hasFilters = f.nucleo || f.categoria || f.estacion || f.estado || f.fuente
+  || f.periodo !== 'actuales';
 ---
 <Base title={`Incidencias ${scopeTitle} — Trenes a tiempo`}
-      description="Avisos oficiales de Renfe (GTFS-RT) por núcleo, línea y estación: obras, servicio interrumpido, servicios alternativos y accesibilidad.">
+      description="Incidencias y avisos oficiales de Renfe por núcleo, línea y estación: qué pasa ahora, qué ha comunicado Renfe y qué se infiere de los retrasos.">
   <nav class="breadcrumb" aria-label="Migas"><a href="/">Inicio</a> › Incidencias</nav>
   <h1>Incidencias {scopeTitle}</h1>
-  <p class="muted">Avisos oficiales publicados por Renfe en su feed GTFS-RT. Mostramos el
-    alcance tal como lo declara Renfe (estación o línea) y clasificamos cada aviso con
-    reglas explícitas; no inventamos severidades.</p>
+  <p class="muted">Qué está pasando ahora: avisos de los canales oficiales de Renfe,
+    problemas inferidos de los retrasos en tiempo real y el feed oficial GTFS-RT.
+    Cada fuente va etiquetada; no inventamos severidades.</p>
 
   <form class="filters card tight" method="get" action="/incidencias">
     <label>Núcleo
@@ -94,61 +132,106 @@ const scopeTitle = f.estacion ? `en ${stationName}`
         </select>
       </label>
     )}
+    <label>Estado
+      <select name="estado">
+        <option value="">Cualquiera</option>
+        {Object.entries(ESTADOS).map(([k, v]) => <option value={k} selected={k === f.estado}>{v}</option>)}
+      </select>
+    </label>
     <label>Tipo
       <select name="categoria">
         <option value="">Todos</option>
         {Object.entries(CATS).map(([k, v]) => <option value={k} selected={k === f.categoria}>{v}</option>)}
       </select>
     </label>
-    <label>Periodo
+    <label>Fuente
+      <select name="fuente">
+        <option value="">Todas</option>
+        {Object.entries(FUENTES).map(([k, v]) => <option value={k} selected={k === f.fuente}>{v}</option>)}
+      </select>
+    </label>
+    <label>Periodo GTFS
       <select name="periodo">
         {Object.entries(PERIODS).map(([k, v]) => <option value={k} selected={k === f.periodo}>{v}</option>)}
       </select>
     </label>
     {f.estacion && <input type="hidden" name="estacion" value={f.estacion} />}
     <button type="submit">Filtrar</button>
-    {(f.nucleo || f.categoria || f.estacion || f.periodo !== 'actuales') &&
-      <a href="/incidencias" class="reset">Quitar filtros</a>}
+    {hasFilters && <a href="/incidencias" class="reset">Quitar filtros</a>}
   </form>
 
-  <section class="card" aria-labelledby="of-h" id="avisos-oficiales">
-    <h2 id="of-h">Avisos oficiales (canales de Renfe)</h2>
-    <p class="muted note">Mensajes publicados por Renfe en sus canales, con el texto original.
-      No se editan ni se resumen.</p>
-    <OfficialNotices items={notices} empty="Sin avisos oficiales abiertos en las últimas 24 h" />
-  </section>
-
-  <section class="card" aria-labelledby="gtfs-h">
-    <h2 id="gtfs-h">Avisos del feed oficial GTFS-RT</h2>
-    {error && <div class="alert" role="alert">{error}</div>}
-    {data && (
-    <>
-      <SourceStatus source={data.source} count={data.total} />
-      {data.total > 0 && (
-        <p class="counts muted">
-          {data.total} aviso{data.total === 1 ? '' : 's'} ·{' '}
-          {Object.entries(data.counts.by_category).map(([k, n]) => (
-            <a href={`/incidencias?${new URLSearchParams({ ...Object.fromEntries(Object.entries(f).filter(([, v]) => v)), categoria: k })}`}
-               class="cnt">{CATS[k] || k}: {n as number}</a>
-          ))}
+  {showA && (
+    <section class="card" aria-labelledby="of-h" id="avisos-oficiales">
+      <h2 id="of-h">Avisos oficiales (canales de Renfe)</h2>
+      {waHealth && waHealth.status !== 'disabled' && (
+        <p class={`wa ${waHealth.status}`} role="status">
+          Captura WhatsApp:
+          {waHealth.status === 'ok' && <> operativa</>}
+          {waHealth.status === 'stale' && <> sin descargas recientes</>}
+          {waHealth.status === 'down' && <> con errores</>}
+          {waHealth.status === 'degraded' && <> degradada</>}
+          {waHealth.session && <> · sesión {waHealth.session}</>}
         </p>
       )}
-      {data.total === 0 && data.source?.status === 'ok' && (
-        <div class="card muted">No hay avisos oficiales {PERIODS[f.periodo].toLowerCase()} con estos
-          filtros. La fuente está operativa: la ausencia de avisos no garantiza que no haya
-          retrasos, consulta el <a href="/retrasos">ranking en vivo</a>.</div>
-      )}
-      {data.items.map((a: any) => <IncidentCard a={a} />)}
-    </>
-    )}
-  </section>
+      <p class="muted note">Mensajes publicados por Renfe en sus canales, con el texto original.
+        No se editan ni se resumen.</p>
+      <OfficialNotices items={notices} empty="Sin avisos oficiales con estos filtros" />
+    </section>
+  )}
 
-  {!f.estacion && (
+  {showB && !f.estacion && (
     <section class="card" aria-labelledby="inf-h">
       <h2 id="inf-h">Posibles incidencias inferidas</h2>
       <p class="muted note">Calculadas a partir de los retrasos informados en tiempo real.
         No son avisos oficiales de Renfe. Se muestran los abiertos y los resueltos de las últimas 6 h.</p>
       <IncidentSignals items={sigItems} empty="Sin retrasos generalizados detectados ahora." />
+    </section>
+  )}
+
+  {showC && (
+    <section class="card" aria-labelledby="gtfs-h">
+      <h2 id="gtfs-h">Avisos del feed oficial GTFS-RT</h2>
+      {error && <div class="alert" role="alert">{error}</div>}
+      {data && (
+      <>
+        <SourceStatus source={data.source} count={data.total} />
+        {gtfsStale && gtfsItems.length > 0 && (
+          <details class="frozen">
+            <summary>
+              {gtfsItems.length} aviso{gtfsItems.length === 1 ? '' : 's'} en el feed,
+              contenido sin cambios desde {fmtStamp(data.source.content_changed_at)}
+              {' '}— <strong>no son novedades de hoy</strong>
+            </summary>
+            <p class="muted note">El feed sigue publicándolos (conservan su activePeriod),
+              pero el contenido no cambió desde entonces; pueden estar vigentes o ya
+              retirados sin que Renfe lo haya actualizado.</p>
+            {gtfsItems.map((a: any) => <IncidentCard a={a} />)}
+          </details>
+        )}
+        {!gtfsStale && (
+          <>
+            {gtfsItems.length > 0 && (
+              <p class="counts muted">
+                {gtfsItems.length} aviso{gtfsItems.length === 1 ? '' : 's'} ·{' '}
+                {Object.entries(data.counts.by_category).map(([k, n]) => (
+                  <a href={`/incidencias?${new URLSearchParams({ ...Object.fromEntries(Object.entries(f).filter(([, v]) => v)), categoria: k })}`}
+                     class="cnt">{CATS[k] || k}: {n as number}</a>
+                ))}
+              </p>
+            )}
+            {gtfsItems.length === 0 && data.source?.status === 'ok' && (
+              <div class="card muted">No hay avisos oficiales {PERIODS[f.periodo].toLowerCase()} con estos
+                filtros. La fuente está operativa: la ausencia de avisos no garantiza que no haya
+                retrasos, consulta el <a href="/retrasos">ranking en vivo</a>.</div>
+            )}
+            {gtfsItems.map((a: any) => <IncidentCard a={a} />)}
+          </>
+        )}
+        {gtfsStale && gtfsItems.length === 0 && (
+          <p class="muted">Sin avisos en el feed (contenido sin cambios).</p>
+        )}
+      </>
+      )}
     </section>
   )}
   <p class="muted small">Fuente: Renfe Operadora, GTFS-RT Service Alerts
@@ -167,4 +250,10 @@ const scopeTitle = f.estacion ? `en ${stationName}`
   .small { font-size: .78rem; margin-top: 1.5rem; }
   h2 { font-size: 1rem; margin: 0 0 .3rem; }
   .note { font-size: .82rem; margin: 0 0 .5rem; }
+  .wa { font-size: .8rem; margin: .1rem 0 .4rem; }
+  .wa.ok { color: var(--ok); }
+  .wa.stale, .wa.degraded { color: var(--warn); }
+  .wa.down { color: var(--bad); }
+  .frozen { border: 1px solid var(--border); border-radius: 10px; padding: .5rem .8rem; }
+  .frozen > summary { cursor: pointer; font-size: .88rem; color: var(--muted); min-height: 36px; }
 </style>
