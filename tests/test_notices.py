@@ -193,6 +193,8 @@ def _fake_client(payload_or_exc, seen):
 
         def get(self, url, params=None, headers=None):
             seen.append((url, params, headers))
+            if "/api/sessions/" in url:
+                return _FakeResp({"name": "default", "status": "WORKING"})
             if isinstance(payload_or_exc, Exception):
                 raise payload_or_exc
             return _FakeResp(payload_or_exc)
@@ -215,9 +217,9 @@ def test_waha_inserta_una_vez_e_idempotente(nscen, monkeypatch):
     assert run_whatsapp_cycle() == 2
     assert run_whatsapp_cycle() == 0   # dedupe por (source, channel, external_id)
 
-    url, params, headers = seen[0]
+    url, params, headers = next(s for s in seen if "/channels/" in s[0])
     assert url == "http://waha.test/api/default/channels/0029VaABC/messages/preview"
-    assert params == {"downloadMedia": "false", "limit": 50}
+    assert params == {"downloadMedia": "false", "limit": 100}
     assert headers == {"X-Api-Key": "secreto"}
 
     with nscen.begin() as c:

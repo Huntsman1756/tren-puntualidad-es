@@ -2,6 +2,7 @@
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -370,6 +371,10 @@ class OfficialNotice(Base):
     is_update = Column(Integer, default=0)
     thread_id = Column(BigInteger)
     parse = Column(JSONB)  # evidencia del parser
+    # procedencia verificada: whatsapp = canal allowlist validado por
+    # configuración; manual = pendiente hasta verificación administrativa
+    verified = Column(Boolean)
+    source_url = Column(Text)  # de dónde se copió un aviso manual (opcional)
 
 
 Index(

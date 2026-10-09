@@ -16,4 +16,14 @@ os.environ.setdefault(
 # las estadísticas v0.4 se montan solo con STATS_PUBLIC=1; los tests las cubren
 os.environ.setdefault("STATS_PUBLIC", "1")
 
+import pytest as _pytest  # noqa: E402
 from dbfix import client, db_engine, scenario  # noqa: E402,F401
+
+
+@_pytest.fixture(autouse=True)
+def _waha_no_throttle(monkeypatch):
+    """El sondeo WAHA se regula con POLL_WAHA; en tests no hay espera real."""
+    import collector.config as _cfg
+    import collector.notices as _n
+    monkeypatch.setattr(_cfg, "POLL_WAHA", 0)
+    monkeypatch.setattr(_n, "_last_poll", 0.0)
