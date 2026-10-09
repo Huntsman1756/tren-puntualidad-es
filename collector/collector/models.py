@@ -290,6 +290,22 @@ class RouteCore(Base):
 Index("ix_route_core_nucleo", RouteCore.feed, RouteCore.nucleo)
 
 
+class CaptureHealth(Base):
+    """Salud de la captura RT por (feed, fuente, día local Europe/Madrid).
+
+    Lo escribe el collector en cada sondeo correcto: nº de sondeos, primer y
+    último sondeo y mayor hueco entre sondeos consecutivos. Las estadísticas
+    lo usan para excluir días de captura parcial (arranque, caídas)."""
+    __tablename__ = "capture_health"
+    feed = Column(String(8), primary_key=True)
+    source = Column(String(16), primary_key=True)   # trip_update | fleet
+    day = Column(Date, primary_key=True)
+    polls = Column(Integer, default=0)
+    first_ts = Column(BigInteger)
+    last_ts = Column(BigInteger)
+    max_gap_sec = Column(Integer, default=0)
+
+
 class Shape(Base):
     """Puntos de shapes.txt (solo CER publica geometrías)."""
     __tablename__ = "shapes"
